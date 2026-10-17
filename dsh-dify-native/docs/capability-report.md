@@ -89,3 +89,11 @@ DIFY_E2E_EVIDENCE=/tmp/dify-e2e-evidence.json node tests/engine-e2e.test.mjs
 ```
 
 默认从 PATH 的 dsh 可执行文件定位发行版，也可设置 `DSH_ENTRY=/absolute/path/to/dsh/lib/bin.js`。`DIFY_PYTHONPATH` / `DIFY_RUNTIME_PYTHON` 可指定已有 Python 环境。运行约需十几秒至几十秒；只使用回环 HTTP，不依赖公网模型或 Jina 的稳定性。
+
+## 尚未完成
+
+- 真实 Dify datasource 插件/其他导出参数形态未覆盖；本次仅证明样本的本地 path 契约。
+- `http-request.ssl_verify`、`start.config` 尚未补齐；当前测试不能证明这些选项生效。
+- 表单 conversation 变量跨 run 持久化，以及公网 Jina 部署仍需处理。
+- file 输入的“multiple values for keyword argument”未复现；新增测试证明 dict 原样传入，未宣称修复该未复现错误。
+- RAG 扩展按用户要求暂停。尚未合并 main 或推送远端。

@@ -100,7 +100,7 @@ DSL 的 `tool_parameters` 成为宿主工具的 `arguments`；`tool_configuratio
 - 用 `provider/tool` 作为键登记；**同名后加载的覆盖先加载的**（顺序取决于目录遍历顺序，不保证确定）。
   被覆盖的旧契约仍会留在 `list()` 里重复出现，但 `get()` 拿到的是最后加载的那份。
 
-> 静默跳过对部署方便，但排错时不友好：文件不生效时先检查 `dify_native_inspect` 报出的
+> 静默跳过对部署方便，但排错时不友好：文件不生效时先检查工具执行失败信息中的
 > "Declared tools" 列表，再看 YAML 是否有语法错误、`provider`/`tool`/`request.url` 是否齐全。
 
 ---
@@ -321,7 +321,7 @@ HTTP 客户端：优先 `ctx.get('web').fetch`，否则 `globalThis.fetch`；都
 | URL 不是绝对地址 | `url is not absolute: <模板>` |
 | 没有 HTTP 客户端 | `no HTTP client available to execute the tool contract` |
 | 请求抛错 / 中止 / 超时 | `request failed: <原因>`（超时原因是 `timed out after <N>ms`，取消是 `cancelled`） |
-| 非 2xx | `returned HTTP <status>: <响应体前 400 字节>` |
+| 非 2xx | `returned HTTP <status>: <响应体前 400 字符>` |
 | 未声明、未 opt-in | `"<provider>/<tool>" is not declared in this deployment. Declared tools: …` |
 | `.difypkg` 插件 | `Dify plugin packages … are not supported by this runtime` |
 
@@ -343,7 +343,7 @@ HTTP 客户端：优先 `ctx.get('web').fetch`，否则 `globalThis.fetch`；都
 - **同名契约后加载者覆盖先加载者**，没有冲突报告。
 - **契约在 provider 构造时加载一次**，运行中修改文件不生效。
 - **契约指定的是真实外部 HTTP 服务**：本运行时只负责按声明发送请求，不对目标服务的身份、
-  TLS 证书、返回值语义做任何验证或担保。凭据来自 DSL 的 `tool_configurations`，
+  返回值业务语义做任何验证或担保（TLS 校验沿用 HTTP 客户端默认行为）。凭据来自 DSL 的 `tool_configurations`，
   会出现在按声明构造的 header / query / body 里——**契约文件与工作流都必须视为可信输入**。
 - **宿主工具 passthrough 不传递 `tool_configurations`**，且宿主工具的入参校验由宿主工具自己负责。
 - 每个工具调用都是**一次独立请求**，没有重试、没有缓存、没有速率限制。
