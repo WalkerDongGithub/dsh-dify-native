@@ -14,21 +14,33 @@ Dify .yml
         ├─ ctx.subagents ─────────────┴─ 注册为 `dify-node`，按节点 kind 分派
         ├─ ctx.llm.stream ──────────── LLM 节点走宿主 provider 路由 / 凭据 / 订阅
         ├─ ctx.sandbox.confine ─────── code 节点走 landlock / bwrap 隔离
-        └─ ctx.tools.execute ───────── tool 节点走宿主工具白名单
+        ├─ ctx.web.fetch / fetch ───── 声明式工具契约的一次 HTTP 调用
+        └─ ctx.tools.execute ───────── 显式 opt-in 的宿主工具 passthrough
 ```
 
-`lib/` 不 import 任何 `@deepseek-ai/*` 运行期类，全部从注入的 Cordis 上下文里取。
+`lib/` 不 import 任何 `@deepseek-ai/*` 运行期类，全部从注入的 Cordis 上下文里取
+。
 **dsh 源码零改动。**
 
-第三方依赖两个：
+第三方依赖三个，都**不装进 dsh 安装目录**：
 
-| 依赖 | 用途 |
-| --- | --- |
-| `yaml` | 解析 Dify `.yml`（dsh 部署本身已带） |
-| `nunjucks` | `template-transform` 的 Jinja2 渲染（Jinja2 的 JS 移植） |
+| 依赖 | 用途 | 来源 |
+| --- | --- | --- |
+| `yaml` | 解析 Dify `.yml`，以及 `lib/tool-contracts.js` 里的工具契约 YAML | dsh 部署本身已带 |
+| `ajv` | LLM 节点 `structured_output` 的 JSON Schema 校验（含一次修复回合） | dsh 运行期自带（`@deepseek-ai/dsh` 的依赖），已在 `lib/provider.js` 里直接 `import` |
+| `nunjucks` | `template-transform` 的 Jinja2 渲染（Jinja2 的 JS 移植） | 插件自己声明 |
 
-`nunjucks` 装在**插件自己的 `node_modules/`** 里，不装进 dsh 安装目录。插件通过
-`link:` 挂进 profile 时，Node 会向上找到插件目录的 `node_modules`，所以无需额外配置。
+`nunjucks` 装在**插件自己的 `node_modules/`** 并写进了 `package.json` 的 `dependencies`，
+插件通过 `link:` 挂进 profile 时 Node 会向上解析到它，无需额外配置。
+`ajv` 由 dsh 安装自带（`@deepseek-ai/dsh` 的依赖），`lib/provider.js` 直接 `import 'ajv'`，
+按 Node 的解析规则向上查找 `node_modules`。用 `link:` 挂载时本仓库位于
+`/home/walker/dify-test/dsh-dify-native`，**不**在 `<dsh 安装目录>/node_modules` 之下——
+这种布局下 `ajv` 能否解析取决于 profile / 安装方式，本仓库没有为此写入 `package.json` 依赖。
+把插件单独拷到别处运行前需自行提供 `ajv`。
+
+> 代价：`structured_output` 依赖 dsh 自带的 `ajv`，这是一条未写进本包 `package.json` 的隐式依赖。
+> 只有在 `ajv` 确实能被解析到时 `lib/provider.js` 才能加载；解析不到时不是"跳过校验"，
+> 而是插件加载即失败（模块解析错误）。
 
 
 ---
@@ -89,17 +101,29 @@ if ((__ran["br"] === true && __branch["br"] === "true")) { /* true 分支 */ }
 
 ## 节点支持
 
-解析层是**完整覆盖**的：Dify 前端的 31 个 `BlockEnum` 加上 3 个别名，全部能识别、
-能归一化成 IR kind。没有一个会掉到 `generic`——包括未来版本里出现的新类型，
-也会被解析出来并明确标记，而不是"我不认识这个节点"。
+### 解析层：覆盖已知的节点类型
 
-执行层按节点逐级实现，并且**如实标注每一级的成色**（见下一节）。
+`lib/dsl.js` 认识 Dify 前端 `BlockEnum` 里的 **30 个类型**（见 `tests/coverage.test.mjs` 里的
+`BLOCK_ENUM` 列表，以该列表为准），再加 3 个导出里出现的别名 / 标记
+（`custom-note`、`iteration-end`、`trigger`），全部归一化成 IR kind，没有一个会掉到 `generic`。
 
-### 完整语义
+**这只是解析层的事实**：它证明"认识"这些类型，不等于"执行语义完整"。而且它只覆盖写死的列表——
+Dify **未来版本**新增的节点类型不在里面，会被当作未知类型（`node-unknown` 诊断 + `passthrough` 支持级别），
+不会导致整张图失败，但也不会执行该节点的实际工作。
+
+执行层按节点逐级实现，并且**如实标注每一级的成色**（见下一节）。下面的"完整语义"是
+**支持级别的标签**——即"没有已知的降级原因"，不是"Dify 的全部语义都由本运行时验证过"。
+
+### 完整语义（`full`）
 
 `start` · `end` · `answer` · `if-else` · `code` · `template-transform` ·
 `variable-aggregator` · `assigner` · `list-operator` · `iteration` · `loop` ·
 `question-classifier` · `http-request` · `trigger*` · `parameter-extractor`
+
+`full` 是**默认级别**：它意味着"**没有**检测到降级原因"，而不是逐字段对照 Dify 验证过的结论
+（一条 `full` 记录可能是"实现了"，也可能只是"没有触发任何已知的降级规则"）：
+- 节点声明了运行时未实现的字段，会自动降为 `simplified`（理由 `some declared fields were dropped`）；
+- 但没有声明、或运行时根本没扫描到的字段，不会触发降级。
 
 几个值得单独说的：
 
@@ -119,7 +143,12 @@ if ((__ran["br"] === true && __branch["br"] === "true")) { /* true 分支 */ }
 
   **模板写错了就报错**：语法错误在 `dify_native_inspect` 阶段就能看到，
   执行时该节点直接失败并给出出错行，绝不把原始模板文本当结果返回。
-- **`variable-aggregator`** 编译成普通 JS（取第一个非空分支值），零 agent 调用。
+- **`variable-aggregator`** 编译成普通 JS，零 agent 调用。
+
+  **选择规则按 Dify 1.9.1 的 `VariableAggregatorNode._run` 实现**：取第一路**存在**的变量
+  （未运行的节点 = `undefined`），**只判断存在性，不看内容**。所以第一路分支真的运行了、
+  但值为 `null` 或空串（`""`）、`0`、`[]` 时，结果就是那个 `null` / 空值——**不会**继续往后找。
+  高级设置开启分组（`advanced_settings.group_enabled`）时按组各自选。
 
 ### 部分语义（`simplified`）
 
@@ -128,7 +157,7 @@ if ((__ran["br"] === true && __branch["br"] === "true")) { /* true 分支 */ }
 | 节点 | 现状 | 缺口 |
 | --- | --- | --- |
 | `knowledge-retrieval` | 在本地数据集目录上做词法 grep（含 CJK bigram） | **不是向量检索**，没有 embedding |
-| `tool` | 经 `ctx.tools.execute` 分派到宿主工具，白名单管控 | 只覆盖宿主已注册的工具 |
+| `tool` | 三选一：声明式 YAML 契约（一次 HTTP 请求 + 响应映射）/ 显式 opt-in 的宿主工具 passthrough / 拒绝 | **不支持 `.difypkg` 插件**（需要 plugin daemon）；没有名字猜测表；契约格式与限制见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md) |
 | `agent` | 单次模型回合 | **声明的 tools 不执行** |
 | `document-extractor` | 文本类文件 | **无 PDF / Office 解析** |
 | `datasource` | 本地 JSON / JSONL / 文本文件 | 不是 Dify datasource 插件 |
@@ -137,6 +166,12 @@ if ((__ran["br"] === true && __branch["br"] === "true")) { /* true 分支 */ }
 ### 占位（`placeholder`）
 
 - `knowledge-index` —— 没有挂载向量库，什么都不写，但会出现在记录里。
+
+### 未知类型（`passthrough`）
+
+`lib/dsl.js` 的已知类型是写死的列表。列表之外的节点类型（例如 Dify 未来版本新增的类型）
+会被标记为 `node-unknown` 诊断、以 `passthrough` 级别执行——也就是说，它**不执行该节点的实际工作**，
+只是让图能继续走。支持级别在 `dify_native_inspect` 的 `support` 列表里逐节点给出。
 
 ---
 
@@ -221,8 +256,14 @@ session log，不引入自己的会话存储。
 ## 安全边界
 
 - **code 节点**：`ctx.sandbox.confine` 隔离。没有沙箱就返回错误，不降级裸跑。
-- **tool 节点**：白名单先于调用。默认 `web_search,web_fetch`，未列出的工具在
-  dispatch 之前就被拒。`DIFY_TOOL_ALLOW=*` 表示全放开。
+- **tool 节点**：白名单先于任何解析。默认 `web_search,web_fetch`（只做精确匹配，没有通配），
+  未列出的工具在 dispatch 之前就被拒。`DIFY_TOOL_ALLOW=*` 表示全放开。
+  放行之后只有两条真正执行的路：**声明式 YAML 契约**（`DIFY_TOOLS_ROOT` 下的
+  provider/tool 契约，一次 HTTP 调用）和**显式 opt-in 的宿主工具**（`DIFY_TOOL_PASSTHROUGH`
+  里列出的确切工具名）。没有名字猜测表——`jina_reader` 不会被悄悄换成 `web_fetch`。
+  **`.difypkg` 插件形态的工具不支持**（需要 Dify plugin daemon），会明确拒绝。
+  契约格式、替换语法和限制见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md)。
+  契约会把 `tool_configurations` 当作凭据拼进请求，所以**契约文件与工作流都必须可信**。
 - **document-extractor**：本地文件路径必须解析在 workspace 或 `DIFY_DOCUMENT_ROOT` 之内，
   越界直接拒绝；同时支持 `ctx.web.fetch` 拉远程 URL 的文本。
 - **knowledge-retrieval**：`dataset_ids` 按 `DIFY_KNOWLEDGE_ROOT` 解析成本地目录，
@@ -288,11 +329,14 @@ session log，不引入自己的会话存储。
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
 | `DIFY_LLM_PROVIDER` + `DIFY_LLM_MODEL` | — | 强制 LLM 路由，**两个都要设才生效** |
-| `DIFY_TOOL_ALLOW` | `web_search,web_fetch` | tool 节点白名单，逗号分隔；`*` 全放开 |
+| `DIFY_TOOL_ALLOW` | `web_search,web_fetch` | tool 节点白名单，逗号分隔，精确匹配；`*` 全放开 |
+| `DIFY_TOOLS_ROOT` | —（无契约） | 声明式工具契约的根目录，**冒号分隔**多个目录，递归扫描 `*.yaml` / `*.yml` |
+| `DIFY_TOOL_PASSTHROUGH` | —（不放开） | 允许 tool 节点按**确切名字**调用的宿主工具，逗号分隔 |
 | `DIFY_KNOWLEDGE_ROOT` | `<workspace>/knowledge` | knowledge-retrieval 的数据集根目录 |
 | `DIFY_DOCUMENT_ROOT` | `<workspace>` | document-extractor 的文件根目录 |
 | `DIFY_RUNTIME_PYTHON` | `python3` | 执行 code 节点的解释器 |
 | `DIFY_PYTHONPATH` | 自动探测 | Python 的 `PYTHONPATH` |
+| `DIFY_VENDOR_DIR` | 同 `DIFY_PYTHONPATH` | code 节点 `dependencies` 的安装目录 |
 | `DSH_DIFY_RUNTIME_ROOT` | `../dsh-dify-runtime/runtime` | 找 vendored Python 库的根 |
 
 ---
@@ -306,22 +350,40 @@ cd dsh-dify-native
 ./tests/run-all.sh        # → ALL TESTS OK
 ```
 
-九个文件，覆盖：
+这是**单元 / 集成层的离线测试**，证明的是运行时自身的翻译与分派逻辑符合实现意图。
+总入口也执行已安装 dsh 的真实工作流引擎测试，LLM 使用固定回复。它不证明与 Dify 官方执行器逐字段一致，
+最终能力证据以 [`docs/capability-report.md`](docs/capability-report.md) 为准。
+
+`run-all.sh` 当前跑 18 个文件，覆盖：
 
 | 文件 | 覆盖 |
 | --- | --- |
 | `dsl.test.mjs` | 解析、IR、编译、拒绝不合法的图 |
 | `nodes.test.mjs` | 节点执行语义 |
 | `nodes-new.test.mjs` | 后补节点（agent / datasource / document / list-operator / trigger …） |
-| `coverage.test.mjs` | 31 个 `BlockEnum` 全覆盖；18 个真实 DSL 样本零未知类型、全部可编译 |
+| `control-semantics.test.mjs` | 控制流语义（分支、守卫、容器） |
+| `coverage.test.mjs` | 30 个 `BlockEnum` 类型解析到已知 kind；`../dsl/*.yml` 样本零未知类型、全部可编译 |
 | `diagnostics.test.mjs` | 诊断只在真缺口时出现，且从不升级成编译错误 |
+| `template-jinja.test.mjs` | 模板替换与 Jinja2 渲染 |
 | `session-memory.test.mjs` | 记忆滤网、窗口、role_prefix |
 | `sys-vars.test.mjs` | 系统变量来自 args，无会话时保持默认 |
+| `code-file-input.test.mjs` | code 节点的文件输入 |
 | `provider.test.mjs` | classifier / http-request / tool 白名单 / knowledge-retrieval |
+| `tool-contracts.test.mjs` | 声明式工具契约：加载、占位符、空值省略、响应映射、失败路径 |
+| `tool-node.test.mjs` | tool 节点分派：契约 → `.difypkg` 拒绝 → passthrough → 拒绝 |
+| `structured-output.test.mjs` | structured_output 的 ajv 校验 + 一次修复回合 |
 | `translation-script.test.mjs` | 分支编译成普通 `if`，两条路径都正确 |
+| `container-scope.test.mjs` | 容器作用域及嵌套回归 |
+| `engine-e2e.test.mjs` / `engine-nested.test.mjs` | 真实 dsh 引擎的样本矩阵、分支、失败和嵌套容器 |
 
-`coverage.test.mjs` 会扫描仓库里的 `../dsl/*.yml` 真实样本。当前 18 个样本
-**全部零 issue、零未知类型**，其中 12 个是全语义实现。
+测试覆盖的是**已验证的范围**：`coverage.test.mjs` 扫描的 `../dsl/*.yml` 样本、以及各测试里构造的
+图。它们不能推出"任意 Dify 工作流都可运行"。
+
+`coverage.test.mjs` 对样本只断言两件事：零未知类型、零解析/调度 issue、能编译成脚本。
+它**不**要求所有节点都是 `full` 级别——实际用 `dify_native_inspect` 的 `support` 列表逐节点看，
+当前 18 个样本里就有若干节点是 `simplified`（如 `agent`、`datasource`、`document-extractor`、
+`list-operator`、`knowledge-retrieval`，以及声明了被丢弃字段的 `llm`）。
+`full` 是"没有检测到降级原因"的默认值，不是"Dify 全语义已被验证"的结论。
 
 ---
 
@@ -329,12 +391,16 @@ cd dsh-dify-native
 
 | 文件 | 职责 | 行数 |
 | --- | --- | --- |
-| `lib/dsl.js` | 解析 Dify DSL → IR → 编译编排脚本。校验图结构、拓扑排序、分支守卫。 | ~1800 |
-| `lib/provider.js` | `dify-node` provider：按 kind 分派节点，每个节点一个 capability 实现。 | ~1545 |
+| `lib/dsl.js` | 解析 Dify DSL → IR → 编译编排脚本。校验图结构、拓扑排序、分支守卫。 | ~1880 |
+| `lib/provider.js` | `dify-node` provider：按 kind 分派节点，每个节点一个 capability 实现；tool 节点分派根。 | ~1800 |
 | `lib/index.js` | Cordis 插件：注册 provider + 四个工具，渲染 inspect/run 输出。 | ~510 |
+| `lib/tool-contracts.js` | 声明式工具契约：加载 YAML、替换三种占位符、一次 HTTP 调用、响应映射。 | ~330 |
 | `lib/jinja.js` | `template-transform` 的 Jinja2 渲染（nunjucks + 过滤器补齐 + 属性访问防护）。 | ~235 |
 | `lib/session-history.js` | Dify memory ↔ harness session log 的适配层。 | ~130 |
 | `lib/diagnostics.js` | 诊断收集器 + 字段丢弃扫描。无依赖、无副作用。 | ~135 |
+
+文档：[`docs/dify-tool-contract.md`](docs/dify-tool-contract.md)（工具契约格式与限制）、
+[`docs/control-semantics.md`](docs/control-semantics.md)（控制流语义）。
 
 `dsl.js` 和 `provider.js` 都是纯翻译层 / 能力层——它们不调度、不隔离、不连模型。
 
@@ -355,3 +421,10 @@ cd dsh-dify-native
   原版 nunjucks 对这种写法**静默返回 `NaN`**，那正是本运行时拒绝产生的那种错误。
   模板用了 nunjucks 也不认识的构造时，节点会失败并说明原因，而不是输出错的文本。
 - **模板里的属性访问未完全沙箱化**。见上面「安全边界」里的已知限制。
+- **工具只覆盖"一次 HTTP 请求 + 取字段"**。`.difypkg` 插件不支持；需要签名、OAuth、多步调用的工具
+  无法用契约表达。契约没有参数类型转换、没有 schema 校验，JSON body 只有一层映射。
+  详见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md)。
+- **解析层只认写死的类型列表**。Dify 未来新增的节点类型按未知类型处理（可见诊断 + 不执行实际工作），
+  不会自动获得实现。
+- **`full` 不是"已对 Dify 验证"的同义词**。它是"没有检测到降级原因"的默认级别；
+  与真实 dsh 引擎的执行证据以 [`docs/capability-report.md`](docs/capability-report.md) 为准。
