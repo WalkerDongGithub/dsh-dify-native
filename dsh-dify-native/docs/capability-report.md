@@ -113,3 +113,5 @@ TLS 4651731 已复核且真实引擎测试通过：false 单请求 curl --insecu
 conversation 回归先真实失败（第二次仍为1），修复后 engine-conversation.test.mjs 通过。状态键为 session.id + 工作流绝对路径，默认工作区 `.dify-native-state` 或 DIFY_STATE_DIR；写临时文件 fsync 后原子 rename，锁冲突明确失败，绝不自动清理旧锁或重放。成功运行提交变量，失败不提交；未验证失败节点前已写变量与官方事务边界等价，仍为 S 子项。
 
 #6（trigger/trigger-webhook）与 #9（trigger-plugin）基础桥已修，真实 engine-events.test.mjs 通过；源码固定新版 5dff246，完整部署/诊断边界见 [event-deployment.md](event-deployment.md)。原生插件订阅、公网、multipart/文件生命周期仍 S 子项，未宣称7组全兼容。
+
+#7 trigger-schedule 基础调度已修：croniter 五字段 cron/IANA 时区、真实槽时间、持久位置、去重/重启补偿；engine-schedule.test.mjs 真实引擎通过。visual_config 原生转换及分布式调度仍 S 子项。

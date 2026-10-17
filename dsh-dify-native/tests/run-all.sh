@@ -28,7 +28,8 @@ for test in \
   tests/engine-datasource.test.mjs \
   tests/engine-agent-loop.test.mjs \
   tests/engine-conversation.test.mjs \
-  tests/engine-events.test.mjs
+  tests/engine-events.test.mjs \
+  tests/engine-schedule.test.mjs
 do
   echo "== $test"
   node "$test"

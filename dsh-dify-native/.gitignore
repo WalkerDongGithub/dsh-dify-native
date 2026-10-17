@@ -1,2 +1,3 @@
 # Plugin-owned optional extraction dependencies (installed explicitly).
 .vendor-extraction/
+.vendor-events/

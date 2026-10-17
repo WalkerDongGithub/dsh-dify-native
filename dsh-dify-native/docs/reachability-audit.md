@@ -464,3 +464,5 @@ TLS 4651731 已复核；start.config 在固定版本不存在，不凭空实现�
 额外 conversation 真问题已修：同会话跨 run 持久变量与隔离由 engine-conversation.test.mjs 验证；失败/崩溃期间的逐节点提交边界仍为 S 子项，未宣称完整 Dify DB 等价。
 
 #6 两节点与 #9 一节点：HTTP listener、鉴权/载荷映射、持久去重及显式签名插件桥已修；真实引擎测试 engine-events.test.mjs。新增节点参考另固定 5dff246，路径/函数与 S 边界见 event-deployment.md，未改写历史 Q1。原生订阅/文件/公网未验仍 S。
+
+#7 基础项已修：cron/时区/真实槽时间/持久补偿去重；engine-schedule.test.mjs 先失败缺调度入口，修后真实引擎通过。visual_config 原生转换仍 S 子项；没有以 timer 探针声称 cron 全兼容。

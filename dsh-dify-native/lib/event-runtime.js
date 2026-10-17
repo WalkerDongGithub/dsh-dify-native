@@ -2,7 +2,10 @@
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { resolve } from 'node:path'
+import { resolve, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { parseDifyDsl } from './dsl.js'
 import { stateKey, readState, writeState, lockState } from './runtime-state.js'
 const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b))
@@ -10,6 +13,20 @@ const at = (obj, path) => String(path).split('.').reduce((v,k)=>v?.[k],obj)
 export async function startEventRuntime(ctx, config, parent) {
   if (!parent?.session) throw new Error('Event runtime requires a real parent session')
   if (!config.stateDir || !Array.isArray(config.routes)) throw new Error('Event deployment requires stateDir and routes')
+  const schedules = []
+  const cronSlots = async (route, after, until) => {
+    const vendor = process.env.DIFY_EVENTS_VENDOR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '.vendor-events')
+    const { stdout } = await promisify(execFile)(process.env.DIFY_RUNTIME_PYTHON ?? 'python3', [join(dirname(fileURLToPath(import.meta.url)), 'cron-slots.py'), JSON.stringify({ cron: route.cron, timezone: route.timezone ?? 'UTC', after, until })], { env: { ...process.env, PYTHONPATH: [vendor, process.env.DIFY_PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(':') }, timeout: 10_000, maxBuffer: 1_048_576 })
+    return JSON.parse(stdout)
+  }
+  for (const declaration of config.schedules ?? []) {
+    const parsed = parseDifyDsl(await readFile(declaration.workflow, 'utf8'))
+    const entry = parsed.nodes.find(n => n.data?.type === 'trigger-schedule')
+    if (!entry || !declaration.id) throw new Error('Schedule needs a stable id and a trigger-schedule workflow')
+    const route = { ...declaration, entry, cron: declaration.cron ?? entry.data.cron_expression, timezone: declaration.timezone ?? entry.data.timezone ?? 'UTC', started: declaration.start_at ?? new Date().toISOString() }
+    await cronSlots(route, route.started, route.started)
+    schedules.push(route)
+  }
   const routes = new Map()
   for (const route of config.routes) {
     if (!route.id || !route.endpoint?.startsWith('/') || routes.has(route.endpoint)) throw new Error('Each route needs a unique endpoint and id')
@@ -54,6 +71,27 @@ export async function startEventRuntime(ctx, config, parent) {
       return record
     } finally { await release() }
   }
+  const tick = async (now = new Date()) => {
+    const results = []
+    for (const route of schedules) {
+      const key = stateKey(`schedule:${route.id}`), root = resolve(config.stateDir)
+      const release = await lockState(root, key)
+      try {
+        const saved = await readState(root, key)
+        const until = now.toISOString()
+        const after = saved?.last ?? route.started
+        if (until <= after) continue
+        for (const slot of await cronSlots(route, after, until)) {
+          const record = await deliver(route, `schedule:${slot}`, { headers: {}, query: {}, body: {}, triggered_at: slot })
+          results.push(record)
+          // A failed workflow is settled too; automatic retries would replay effects.
+          await writeState(root, key, { last: slot })
+        }
+        await writeState(root, key, { last: until })
+      } finally { await release() }
+    }
+    return results
+  }
   const server = createServer(async (req, res) => {
     const reply = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
     try {
@@ -81,5 +119,12 @@ export async function startEventRuntime(ctx, config, parent) {
   })
   server.requestTimeout = 30_000
   await new Promise((ok,fail)=>{server.once('error',fail);server.listen(config.port ?? 0,config.host ?? '127.0.0.1',ok)})
-  return { url: `http://${config.host ?? '127.0.0.1'}:${server.address().port}`, deliver, routes, async close() { await new Promise(r=>server.close(r)) } }
+  let ticking = false, closed = false
+  const timer = schedules.length ? setInterval(async () => {
+    if (ticking || closed) return
+    ticking = true
+    try { await tick() } catch (error) { process.stderr.write(`Dify schedule delivery failed (no silent retry): ${error.message}\n`) } finally { ticking = false }
+  }, Math.max(100, Number(config.poll_ms ?? 30_000))) : undefined
+  timer?.unref()
+  return { url: `http://${config.host ?? '127.0.0.1'}:${server.address().port}`, deliver, routes, tick, async close() { if (closed) return; closed = true;clearInterval(timer);await new Promise(r=>server.close(r)) } }
 }

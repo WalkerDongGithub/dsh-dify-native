@@ -435,3 +435,5 @@ cd dsh-dify-native
 运行时不隐式安装，缺库给出可操作错误。未安装重量级 unstructured，旧格式转换仍列 S。
 
 conversation 变量按会话 ID 与工作流绝对路径保存在工作区 `.dify-native-state`（可设 DIFY_STATE_DIR），成功 run 提交；不同会话隔离。并发/遗留锁明确失败，不自动重放；失败 run 的逐节点事务边界尚未证明官方等价。
+
+定时入口使用显式五字段 cron + IANA timezone，安装 `./scripts/install-events.sh`，配置与去重/重启边界见 [事件部署](docs/event-deployment.md)。visual_config 原生转换尚未实现，须显式 cron。
