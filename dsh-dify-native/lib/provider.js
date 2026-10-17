@@ -1476,15 +1476,7 @@ function coerceParameter(type, value) {
   return stringify(value)
 }
 
-/**
- * Dify `agent` node, executed as ONE model turn.
- *
- * The node's strategy and tool policy are parsed and reported, but this runtime
- * deliberately does not run an autonomous tool loop: a tool loop is a
- * model-chosen control flow, and this runtime keeps orchestration
- * deterministic. The instruction/query are still real model input, so the
- * node's wiring (dataflow in, text out) is exercised end to end.
- */
+/** Explicit bounded local strategy, with the existing single-turn compatibility path. */
 async function executeAgent(ctx, spec, request, env) {
   const route = resolveRoute(ctx, spec, env)
   const instruction = String(spec.instruction ?? '').trim()
@@ -1638,11 +1630,7 @@ function resolveDocumentPath(value, workspaceRoot, env) {
   return resolved
 }
 
-/**
- * Dify `document-extractor`, minimal and honest: text-like local files under
- * the workspace (or a configured document root) and text-like remote URLs via
- * `ctx.web.fetch`. PDFs/office formats are reported per file, never faked.
- */
+/** Byte transport to the fixed official extraction functions; errors fail the node. */
 async function executeDocumentExtractor(ctx, spec, request, env) {
   const files = spec.files
   const list = Array.isArray(files) ? files : files == null ? [] : [files]
@@ -1782,32 +1770,32 @@ async function executeKnowledgeIndex(ctx, spec, request, env) {
   }
 }
 
-/**
- * Dify `human-input`, resolved deterministically for a non-interactive run: the
- * run args (`human.<nodeId>.action`, then `action`) pick a declared action,
- * otherwise the first declared action is used. Form inputs come from their
- * declared constants; the resolved action names the outgoing edge.
- */
+/** Explicit actions resolve immediately; otherwise the compiler returns a waiting checkpoint. */
 function executeHumanInput(spec) {
   const actions = (Array.isArray(spec.actions) ? spec.actions : []).filter((action) => stringify(action?.id).length > 0)
   const ids = actions.map((action) => stringify(action.id))
   let chosen = spec.autoAction === undefined || spec.autoAction === null || spec.autoAction === '' ? '' : stringify(spec.autoAction)
-  if (chosen.length === 0) chosen = ids[0] ?? '__timeout'
+  if (chosen.length === 0) {
+    const unitMs = { hour: 3_600_000, day: 86_400_000 }[spec.timeoutUnit ?? 'hour']
+    if (!unitMs || !Number.isFinite(Number(spec.timeout ?? 1)) || Number(spec.timeout ?? 1) < 0) return { ok: false, error: `human-input ${spec.nodeId}: timeout must be nonnegative with timeout_unit hour/day` }
+    return { ok: true, pending: { nodeId: spec.nodeId, actions, formContent: spec.formContent ?? '', formInputs: spec.formInputs ?? [], expiresAt: new Date(Date.now() + Number(spec.timeout ?? 1) * unitMs).toISOString() }, outputs: {} }
+  }
   if (chosen !== '__timeout' && !ids.includes(chosen)) {
     return { ok: false, error: `human-input ${spec.nodeId} action "${chosen}" is not declared (declared: ${ids.join(', ') || '(none)'})` }
   }
-  const outputs = { __action_id: chosen, __action_value: chosen, __rendered_content: spec.formContent ?? '' }
+  const outputs = { __action_id: chosen === '__timeout' ? '' : chosen, __action_value: chosen === '__timeout' ? '' : actions.find(a => a.id === chosen)?.title || chosen, __rendered_content: spec.formContent ?? '' }
   for (const input of spec.formInputs ?? []) {
     const name = stringify(input?.name)
     if (name.length === 0) continue
     const fallback = input?.default
-    outputs[name] = fallback !== null && typeof fallback === 'object' && 'value' in fallback ? fallback.value : fallback ?? ''
+    outputs[name] = spec.submittedInputs?.[name] ?? (fallback !== null && typeof fallback === 'object' && 'value' in fallback ? fallback.value : fallback ?? '')
+    outputs.__rendered_content = outputs.__rendered_content.replaceAll('{{#$output.' + name + '#}}', String(outputs[name]))
   }
   return {
     ok: true,
     branch: chosen,
     outputs,
-    meta: { autoResolved: true, actions: ids, note: 'human step resolved from run args / first declared action' },
+    meta: { autoResolved: spec.humanSubmission !== true, actions: ids, source: spec.humanSubmission === true ? 'pending-submission' : 'explicit-action-injection', note: 'explicit action only; no default automatic choice' },
   }
 }
 

@@ -54,7 +54,7 @@ form-demo 的聊天分支使用解析后 DSL 中预置的 conversation 默认值
 | 有限替代策略 | agent | 显式 dsh-bounded-tools 有界工具循环、白名单/schema/取消/usage；旧单轮兼容路径保留；原生插件策略仍 S |
 | 固定提取函数（有限格式） | document-extractor | PDFium 4.30.0、python-docx、pandas/openpyxl；8 种格式与官方纯函数逐字差分，数组/远程字节/失败已验；旧格式仍有 S 子项 |
 | 有限部署协议 | datasource / datasource-empty | sys 驱动 file/website 输出；声明式远端变量适配，插件参数不猜路径；records 扩展保留，原生插件仍 S |
-| simplified | human-input | 从参数选择动作，或选择第一个动作；不暂停等待真人。额外真实引擎用例分别执行 approve / reject 并检查最终值 |
+| 有限等待协议 | human-input | 顶层持久 waiting/提交/超时恢复；重开与副作用不重放已验，显式 action 注入保留；容器内/高级表单仍 S |
 | placeholder | knowledge-index | 实际被调度，但不写向量库；额外用例断言最终 status=not_written、indexed=0 |
 | passthrough / 非能力实现 | 未知 generic、custom-note | 未知类型仅透传并告警，note 是标注；不能视为业务节点能力 |
 
@@ -115,3 +115,5 @@ conversation 回归先真实失败（第二次仍为1），修复后 engine-conv
 #6（trigger/trigger-webhook）与 #9（trigger-plugin）基础桥已修，真实 engine-events.test.mjs 通过；源码固定新版 5dff246，完整部署/诊断边界见 [event-deployment.md](event-deployment.md)。原生插件订阅、公网、multipart/文件生命周期仍 S 子项，未宣称7组全兼容。
 
 #7 trigger-schedule 基础调度已修：croniter 五字段 cron/IANA 时区、真实槽时间、持久位置、去重/重启补偿；engine-schedule.test.mjs 真实引擎通过。visual_config 原生转换及分布式调度仍 S 子项。
+
+#8 human 基础等待已修，见 [human-wait.md](human-wait.md)。新增真实回归还发现普通 HTTP 成功后下游被错误分支 guard 跳过，先复现 outputs=null，再修到真实响应进入下游（engine-http-follow.test.mjs）。只有 fail-branch 配置才按 HTTP handle 选边；旧断言未变。

@@ -161,7 +161,7 @@ Dify **未来版本**新增的节点类型不在里面，会被当作未知类�
 | `agent` | 显式 dsh-bounded-tools 有界工具循环；旧单轮路径保留 | 原生策略插件仍 S，见 [替代策略协议](docs/agent-strategy.md) |
 | `document-extractor` | 固定官方 PDFium / python-docx / pandas+openpyxl 提取；8 格式逐字差分验证 | 需显式安装轻量依赖；旧 Office/unstructured 链仍有 S 子项，不含 OCR |
 | `datasource` / `datasource-empty` | sys 驱动文件/网站信息 + 声明式远端桥；保留显式 local/file records | 原生插件/云账户尚未验证，见 [部署协议](docs/datasource-contract.md) |
-| `human-input` | 从运行参数或首个声明动作确定性解析 | **不支持暂停/恢复** |
+| `human-input` | 顶层 waiting/持久恢复、提交/超时；保留显式 action 注入 | 容器内暂停/高级表单仍 S，见 [等待协议](docs/human-wait.md) |
 
 ### 占位（`placeholder`）
 
@@ -408,13 +408,11 @@ cd dsh-dify-native
 
 ## 边界
 
-- **不支持非交互暂停**。`human-input` 是确定性解析的，不会真的等人。
+- **人工等待有限**。顶层 human-input 真实等待并持久化快照，恢复跳过已完成副作用；容器内暂停/高级表单仍 S。
 - **没有向量检索**。`knowledge-retrieval` 是词法匹配，`knowledge-index` 是空操作。
-- **触发协议有限**。`trigger*` 支持显式参数注入及 [声明式事件桥](docs/event-deployment.md)；原生插件订阅仍未实现。历史上这个包
-  不监听 webhook、不跑 cron、不订阅事件——什么时候跑由调用方决定。
-- **没有 PDF / Office 解析**。
-- **单轮，无 chat 状态机**。`answer` 节点会累积到 `answers`，多轮对话语义由
-  调用方的会话承担。
+- **触发协议有限**。`trigger*` 支持参数注入、声明式 listener 和 cron；原生插件订阅未实现，见 [事件部署](docs/event-deployment.md)。
+- **文档格式有限**。PDF/DOCX/XLSX 与多种文本格式按固定官方函数提取；旧格式/unstructured 完整链仍 S，未承诺 OCR。
+- **会话持久化有限**。conversation 按 session/workflow 保存；失败与崩溃的逐节点事务边界尚未证明官方等价。`answer` 继续累积到 `answers`。
 - **Jinja2 不是 100% 兼容**。渲染器是 nunjucks（Jinja2 的 JS 移植），少数边角行为
   与 Python Jinja2 有差异。缺失的常用过滤器（`map` / `tojson` / `items` / `unique`）
   已在 `lib/jinja.js` 里补上；`sum(attribute="x")` 的关键字参数形式也重写过了——

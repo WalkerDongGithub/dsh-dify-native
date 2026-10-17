@@ -29,7 +29,10 @@ for test in \
   tests/engine-agent-loop.test.mjs \
   tests/engine-conversation.test.mjs \
   tests/engine-events.test.mjs \
-  tests/engine-schedule.test.mjs
+  tests/engine-schedule.test.mjs \
+  tests/engine-human-wait.test.mjs \
+  tests/engine-http-follow.test.mjs \
+  tests/engine-human-form.test.mjs
 do
   echo "== $test"
   node "$test"

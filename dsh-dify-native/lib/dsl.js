@@ -951,16 +951,16 @@ function nodeSupport(ir) {
       reason = 'lexical grep over local files, not embedding retrieval'
     } else if (node.kind === 'agent') {
       mode = 'simplified'
-      reason = 'single model turn; declared tools are not executed'
+      reason = 'explicit dsh-bounded-tools supports a bounded loop; native strategy plugins remain unverified'
     } else if (node.kind === 'document-extractor') {
       mode = 'simplified'
-      reason = 'text-like files only (no PDF/office extraction)'
+      reason = 'fixed official PDF/Office/text extractors; optional dependencies and legacy formats require deployment'
     } else if (node.kind === 'human-input') {
       mode = 'simplified'
-      reason = 'resolved from run args / first declared action; no pause/resume'
+      reason = 'durable top-level waiting/resume or explicit action injection; nested form modes remain S'
     } else if (node.kind === 'datasource') {
       mode = 'simplified'
-      reason = 'local JSON/JSONL/text file only, not a Dify datasource plugin'
+      reason = 'system file/website outputs and declared HTTP bridge; native datasource plugins remain unverified'
     }
     // A dropped field on an otherwise-full node is still a partial implementation.
     // Diagnostic subjects are `"<nodeId>:<field>"` for field drops and the bare
@@ -1005,6 +1005,9 @@ export function compileGraph(parsed, options = {}) {
   const inspection = inspectIR(ir)
   if (inspection.issues.length > 0) throw new Error(inspection.issues.join('; '))
   if (ir.entryId === undefined) throw new Error('no entry node')
+  if (ir.nodes.some(n => n.kind === 'human-input' && !ir.topNodes.includes(n))) throw new Error('human-input inside iteration/loop needs container checkpoint support (remaining S); refusing before side effects')
+
+  for (const node of ir.nodes.filter(n => n.kind === 'human-input')) if ((node.data.inputs ?? []).some(input => input.type && !['paragraph', 'text-input', 'text_input'].includes(input.type))) throw new Error(`human-input ${node.id}: advanced form/file fields remain S; refusing before side effects`)
 
   const preferredIndex = new Map(ir.nodes.map((node, index) => [node.id, index]))
   const varByNode = new Map()
@@ -1031,11 +1034,12 @@ export function compileGraph(parsed, options = {}) {
   const indentOf = (level) => '  '.repeat(level)
 
   lines.push(`phase(${JSON.stringify(`dify:${parsed.appName || 'workflow'}`)})`)
-  lines.push('const __nodes = {}')
-  lines.push('const __ran = {}')
-  lines.push('const __branch = {}')
-  lines.push('const __branchName = {}')
-  lines.push('const __answers = []')
+  lines.push(`const __cp = args['__dify_checkpoint'] ?? {}`)
+  lines.push('const __nodes = __cp.nodes ?? {}')
+  lines.push('const __ran = __cp.ran ?? {}')
+  lines.push('const __branch = __cp.branch ?? {}')
+  lines.push('const __branchName = __cp.branchName ?? {}')
+  lines.push('const __answers = __cp.answers ?? []')
   // Dify's `{{#context#}}` may hold retrieval segments; render them as text
   // rather than JavaScript's default `[object Object]`.
   lines.push(
@@ -1083,8 +1087,8 @@ export function compileGraph(parsed, options = {}) {
   const environment = Object.fromEntries(
     (parsed.environmentVariables ?? []).filter((v) => v?.name).map((v) => [String(v.name), v.value ?? '']),
   )
-  lines.push(`const __vars = ${JSON.stringify({ conversation, environment })}`)
-  lines.push(`Object.assign(__vars.conversation, args['__dify_conversation'] ?? {})`)
+  lines.push(`const __vars = __cp.vars ?? ${JSON.stringify({ conversation, environment })}`)
+  lines.push(`if (!__cp.vars) Object.assign(__vars.conversation, args['__dify_conversation'] ?? {})`)
   // Dify system variables. `conversation_id` / `dialogue_count` are injected by
   // the run as `args['sys.*']` from the calling harness session (see
   // `systemVariables` in index.js); when absent they stay undefined, which the
@@ -1094,7 +1098,7 @@ export function compileGraph(parsed, options = {}) {
   )
   // `entity` is what Dify calls the item of a list-operator / iteration body in
   // some exports; keep the common ones resolvable.
-  if (counters.var > 0) lines.push(`let ${[...varByNode.values()].join(', ')}`)
+  if (counters.var > 0) lines.push(`let ${[...varByNode.entries()].map(([id,v]) => `${v} = __nodes[${JSON.stringify(id)}]`).join(', ')}`)
   // Jinja2 rendering for template-transform. The engine's script VM exposes no
   // host function, so it goes through `agent()` like every other node and is
   // performed by the `dify-node` provider (nunjucks lives on the JS side).
@@ -1140,7 +1144,7 @@ export function compileGraph(parsed, options = {}) {
           const nameVar = `${scope.branchName}[${JSON.stringify(source)}]`
           return `(${scope.ran}[${JSON.stringify(source)}] === true && (${branchVar} === ${JSON.stringify(handle)} || (${branchVar} === '' && ${nameVar} === ${JSON.stringify(handle)})))`
         }
-        if (BRANCH_KINDS.has(kind)) {
+        if (BRANCH_KINDS.has(kind) && (kind !== 'http-request' || sourceNode.data?.error_strategy === 'fail-branch')) {
           return `(${scope.ran}[${JSON.stringify(source)}] === true && ${scope.branch}[${JSON.stringify(source)}] === ${JSON.stringify(handle)})`
         }
         if (MARKER_KINDS.has(kind)) return `(${scope.ran}[${JSON.stringify(source)}] === true)`
@@ -1325,7 +1329,7 @@ export function compileGraph(parsed, options = {}) {
       spec.actions = (data.user_actions ?? []).map((action) => ({ id: String(action.id ?? ''), title: String(action.title ?? '') }))
       spec.formContent = String(data.form_content ?? '')
       spec.formInputs = (data.inputs ?? []).map((input) => ({
-        name: String(input.output_variable_name ?? ''),
+        name: String(input.output_variable_name ?? input.name ?? ''),
         type: String(input.type ?? 'paragraph'),
         default: input.default ?? null,
       }))
@@ -1411,12 +1415,20 @@ export function compileGraph(parsed, options = {}) {
       // A synchronous run resolves the human step from the run args, then from
       // the node's declared defaults; the resolved action names the edge.
       const argsLookup = (name) => `(args[${JSON.stringify(`human.${node.id}.${name}`)}] ?? args[${JSON.stringify(name)}])`
+      const parts = String(data.form_content ?? '').split(/(\{\{#\$output\.[^#]+#\}\})/)
+      lines.push(`${pad}  ${reqVar}.formContent = ${parts.map(part => part.startsWith('{{#$output.') ? JSON.stringify(part) : renderTextExpr(part, scope)).join(' + ')}`)
+      ;(data.inputs ?? []).forEach((input, index) => {
+        if (input.default?.type === 'variable') lines.push(`${pad}  ${reqVar}.formInputs[${index}].default = { value: ${selectorExpr(input.default.selector, scope)} }`)
+      })
       lines.push(`${pad}  ${reqVar}.autoAction = ${argsLookup('action')}`)
+      lines.push(`${pad}  ${reqVar}.submittedInputs = args[${JSON.stringify(`human.${node.id}.inputs`)}] ?? {}`)
+      lines.push(`${pad}  ${reqVar}.humanSubmission = args[${JSON.stringify(`human.${node.id}.submitted`)}] === true`)
     }
 
     lines.push(`${pad}  const __raw${counters.call} = await agent(JSON.stringify(${reqVar}), { label: ${JSON.stringify(label)} })`)
     lines.push(`${pad}  if (__raw${counters.call} === null) throw new Error('dify node ${node.id} (${label}) failed: no result from provider')`)
     lines.push(`${pad}  ${variable} = JSON.parse(__raw${counters.call})`)
+    if (kind === 'human-input') lines.push(`${pad}  if (${variable}.pending) return { pending: ${variable}.pending, nodes: __nodes, outputs: {}, answers: __answers, conversation: __vars.conversation, checkpoint: JSON.parse(JSON.stringify({ nodes: __nodes, ran: __ran, branch: __branch, branchName: __branchName, answers: __answers, vars: __vars })) }`)
     lines.push(`${pad}  if (!${variable}.ok) throw new Error('dify node ${node.id} (${label}) failed: ' + (${variable}.error ?? 'unknown error'))`)
     lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
     if (kind === 'if-else') lines.push(`${pad}  ${scope.branch}[${JSON.stringify(node.id)}] = String(${variable}.outputs.result)`)
@@ -1880,10 +1892,11 @@ export function compileGraph(parsed, options = {}) {
       continue
     }
     if (node.kind === 'end') continue
+    const uncached = `!__ran[${JSON.stringify(id)}] && (${guardFor(node, unit, topIncoming)})`
     if (CONTAINER_KINDS.has(node.kind)) {
-      emitContainer(node, unit, guardFor(node, unit, topIncoming), 0)
+      emitContainer(node, unit, uncached, 0)
     } else {
-      const guard = guardFor(node, unit, topIncoming)
+      const guard = uncached
       if (HOST_KINDS.has(node.kind)) emitHost(node, unit, guard, 0)
       else emitPure(node, unit, guard, 0)
     }
