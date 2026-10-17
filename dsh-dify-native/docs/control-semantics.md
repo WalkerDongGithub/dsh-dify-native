@@ -22,3 +22,9 @@
 两个分支的 reply 均包含对应建议及两行关键词 `· 退款`、`· 到账`，keywords 均为 `["退款", "到账"]`；完整输出保存在 [triage-semantics-comparison.json](triage-semantics-comparison.json)，前后深度比较一致。原样本已正确处理未执行分支（undefined），不能声称本次修复改变了其输出。
 
 重跑：`node tests/control-semantics.test.mjs --sample`。最终验证：`./tests/run-all.sh` → `ALL TESTS OK`。没有修改既有语义断言、诊断逻辑或依赖。
+
+## HTTP 收尾修正（2026-10-18）
+
+固定 cd47a47 的 `api/core/workflow/nodes/http_request/entities.py:HttpRequestNodeTimeout` 使用 connect/read/write（秒），不是 max_*_timeout；后者来自 get_default_config 的部署默认结构。engine-http-timeout.test.mjs 先复现官方键被忽略导致延迟响应成功，修复后实际请求超时走 fail-branch。旧 max_* 仅作显式兼容回退。目前仍将阶段预算合成单一最大截止时间；独立 connect/read/write 语义仍为 S，不宣称完整等价。
+
+engine-http-follow.test.mjs 另先复现普通 HTTP 成功后下游被分支 guard 跳过、输出 null，修复到实际响应进入下游。仅 error_strategy=fail-branch 才按 HTTP handle 分支。既有测试断言未改。

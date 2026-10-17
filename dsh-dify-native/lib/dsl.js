@@ -149,7 +149,7 @@ const CONSUMED_FIELDS = {
   trigger: new Set(['method', 'content_type', 'variables', 'status_code', 'schedule_type', 'cron', 'mode', 'endpoint']),
   'trigger-schedule': new Set(['schedule_type', 'cron', 'mode', 'variables', 'cron_expression', 'timezone', 'frequency', 'visual_config']),
   'trigger-webhook': new Set(['method', 'content_type', 'variables', 'status_code', 'endpoint', 'headers', 'params', 'body']),
-  'trigger-plugin': new Set(['provider_name', 'provider_id', 'event', 'variables']),
+  'trigger-plugin': new Set(['provider_name', 'provider_id', 'event', 'event_name', 'variables']),
   generic: new Set(),
 }
 
@@ -699,7 +699,8 @@ function httpTimeoutMs(data) {
   const timeout = data?.timeout
   if (typeof timeout === 'number' && timeout > 0) return Math.round(timeout * 1000)
   if (timeout != null && typeof timeout === 'object') {
-    const seconds = ['max_connect_timeout', 'max_read_timeout', 'max_write_timeout']
+    const keys = ['connect', 'read', 'write'].some(key => timeout[key] !== undefined) ? ['connect', 'read', 'write'] : ['max_connect_timeout', 'max_read_timeout', 'max_write_timeout']
+    const seconds = keys
       .map((key) => Number(timeout[key]) || 0)
       .filter((value) => value > 0)
     if (seconds.length > 0) return Math.round(Math.max(...seconds) * 1000)
@@ -943,6 +944,12 @@ function nodeSupport(ir) {
     if (node.kind === 'generic') {
       mode = 'passthrough'
       reason = 'unknown node type'
+    } else if (node.kind === 'trigger' || node.kind.startsWith('trigger-')) {
+      mode = 'simplified'
+      reason = 'declared local event/schedule bridge or explicit injection; native Dify trigger services are not implemented'
+    } else if (node.kind === 'http-request' && node.data?.timeout && typeof node.data.timeout === 'object') {
+      mode = 'simplified'
+      reason = 'timeout keys consumed as a single deadline; independent connect/read/write phase budgets remain S'
     } else if (node.kind === 'knowledge-index') {
       mode = 'placeholder'
       reason = 'no vector store mounted; nothing is written'
@@ -1494,7 +1501,7 @@ export function compileGraph(parsed, options = {}) {
         entries.push(`datasource: ${JSON.stringify(String(data.datasource_name ?? ''))}`)
       }
       lines.push(`${pad}if (${guard}) {`)
-      lines.push(`${pad}  ${variable} = { ok: true, kind: ${JSON.stringify(kind)}, title: ${JSON.stringify(node.title)}, outputs: {${entries.join(', ')}, ...(args[${JSON.stringify(`__dify_event.${node.id}`)}] ?? {})}, meta: { engine: 'event-input', native_plugin_subscription: false } }`)
+      lines.push(`${pad}  ${variable} = { ok: true, kind: ${JSON.stringify(kind)}, title: ${JSON.stringify(node.title)}, outputs: {${entries.join(', ')}, ...(args[${JSON.stringify(`__dify_event.${node.id}`)}] ?? {}), ...Object.fromEntries(Object.entries(__vars.sys).filter((entry) => entry[1] !== undefined).map((entry) => ['sys.' + entry[0], entry[1]]))}, meta: { engine: 'event-input', native_plugin_subscription: false } }`)
       lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
       lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
       lines.push(`${pad}}`)

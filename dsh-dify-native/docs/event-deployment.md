@@ -15,7 +15,7 @@
 ]}
 ```
 
-请求 method 对照节点配置（默认 POST），`Authorization: Bearer <token>`；必须有稳定 `X-Event-ID`。JSON/text body 最大 1 MiB，超出明确 413，不截断；multipart/binary 文件生命周期明确拒绝。可用 inputs 的点路径显式映射 body/headers/query 到 run args；普通 trigger 是本地扩展，无官方同名语义。webhook 按新版声明 headers/params/body 映射输出，旧 variables 参数注入仍保留。
+请求 method 对照节点配置（默认 POST），`Authorization: Bearer <token>`；必须有稳定 `X-Event-ID`。JSON/text body 最大 1 MiB，超出明确 413，不截断；multipart/binary 文件生命周期明确拒绝。可用 inputs 的点路径显式映射 body/headers/query 到 run args；普通 trigger 是本地扩展，无官方同名语义。webhook 按新版声明 headers/params/body 映射输出，旧 variables 参数注入仍保留。webhook/schedule/plugin 输出同时透传 sys.* 系统变量，按固定新版 `_run` 行为；相关真实引擎回归已断言 sys.conversation_id。inspect 将事件桥标为 simplified，保留原生差距。
 
 plugin bridge 必须 `bridge:true`，签名 `X-Event-Signature` 为 hex HMAC-SHA256(key, `event-id + '.' + 原始UTF-8 body`)。本协议是外部桥，不调用 difypkg、daemon 或原生 subscription。meta/event 明确 `native_plugin_subscription=false`。签名不提供业务事件的新鲜度保证，稳定 event-id 负责本地去重。
 

@@ -10,7 +10,7 @@ const config={port:0,stateDir:join(cwd,'state'),schedules:[{id:'morning',workflo
 const h=await realHarness(cwd);let runtime
 try {
  runtime=await startEventRuntime(h.ctx,config,h.parent);assert.equal(typeof runtime.tick,'function','scheduler must expose real delivery tick')
- let results=await runtime.tick(new Date('2026-10-18T01:00:00.000Z'));assert.equal(results.length,1);assert.equal(results[0].status,'succeeded',results[0].error);assert.equal(results[0].outputs.at,'2026-10-18T01:00:00.000Z')
+ let results=await runtime.tick(new Date('2026-10-18T01:00:00.000Z'));assert.equal(results.length,1);assert.equal(results[0].status,'succeeded',results[0].error);assert.equal(results[0].outputs.at,'2026-10-18T01:00:00.000Z');assert.equal(results[0].nodes.t.outputs['sys.conversation_id'],h.parent.session.id)
  assert.deepEqual(await runtime.tick(new Date('2026-10-18T01:00:30.000Z')),[])
  await runtime.close();runtime=await startEventRuntime(h.ctx,config,h.parent)
  results=await runtime.tick(new Date('2026-10-19T01:00:00.000Z'));assert.equal(results.length,1);assert.equal(results[0].outputs.at,'2026-10-19T01:00:00.000Z')

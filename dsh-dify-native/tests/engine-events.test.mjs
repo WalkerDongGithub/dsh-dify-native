@@ -13,7 +13,7 @@ try {
  const tool=h.ctx.tools.get('dify_native_events');assert.ok(tool,'real plugin must expose event deployment tool')
  const active=await tool.execute({configPath},{agent:h.parent});assert.ok(active.url)
  const send=async(path,id,extra={})=>fetch(active.url+path,{method:'POST',headers:{Authorization:'Bearer fixture','X-Event-ID':id,'X-Topic':'deploy','content-type':'application/json',...extra},body:'{"value":"actual event"}'})
- let response=await send('/hook','1');assert.equal(response.status,200);let result=await response.json();assert.equal(result.status,'succeeded',result.error);assert.deepEqual(result.outputs,{value:'actual event',header:'deploy',query:null,topic:null})
+ let response=await send('/hook','1');assert.equal(response.status,200);let result=await response.json();assert.equal(result.status,'succeeded',result.error);assert.equal(result.support.find(n=>n.id==='t').mode,'simplified');assert.equal(result.nodes.t.outputs['sys.conversation_id'],h.parent.session.id);assert.deepEqual(result.outputs,{value:'actual event',header:'deploy',query:null,topic:null})
  response=await send('/hook?q=real','2');result=await response.json();assert.equal(result.outputs.query,'real')
  response=await send('/hook','1');assert.equal(response.status,200);assert.equal((await response.json()).duplicate,true)
  response=await send('/plain','3');result=await response.json();assert.equal(result.outputs.topic,'actual event')
