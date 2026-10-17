@@ -100,6 +100,26 @@ if (process.argv.includes('--sample')) {
       }
     }
   }
+  // EndNode._run keeps every declared key, converting missing pool entries to None.
+  const endGraph = graph([
+    node('s', 'start', { variables: [{ variable: 'nil' }, { variable: 'empty' }, { variable: 'zero' }, { variable: 'flag' }, { variable: 'arr' }, { variable: 'obj' }] }),
+    node('branch', 'if-else', { cases: [{ case_id: 'true', conditions: [] }] }),
+    node('yes', 'template-transform', { template: 'taken', variables: [] }),
+    node('no', 'template-transform', { template: 'untaken', variables: [] }),
+    node('e', 'end', { outputs: [
+      { variable: 'taken', value_selector: ['yes', 'output'] },
+      { variable: 'untaken', value_selector: ['no', 'output'] },
+      ...['missing', 'nil', 'empty', 'zero', 'flag', 'arr', 'obj'].map(variable => ({ variable, value_selector: ['s', variable] })),
+    ] }),
+  ], [edge('s', 'branch'), edge('branch', 'yes', 'true'), edge('branch', 'no', 'false'), edge('yes', 'e'), edge('no', 'e')])
+  const ended = await execute(endGraph, { nil: null, empty: '', zero: 0, flag: false, arr: [], obj: {} }, async prompt => {
+    assert.equal(JSON.parse(prompt).kind, 'if-else')
+    return JSON.stringify({ ok: true, outputs: { result: 'true' } })
+  })
+  assert.equal(ended.nodes.no, undefined, 'unexecuted branch has no pool entry')
+  const expectedEnd = { taken: 'taken', untaken: null, missing: null, nil: null, empty: '', zero: 0, flag: false, arr: [], obj: {} }
+  assert.deepEqual(ended.outputs, expectedEnd)
+  assert.deepEqual(JSON.parse(JSON.stringify(ended.outputs)), expectedEnd, 'missing keys survive JSON transport as null')
   await sample()
   console.log('CONTROL SEMANTICS TESTS OK')
 }

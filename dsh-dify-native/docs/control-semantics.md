@@ -9,3 +9,16 @@
 - `api/core/workflow/nodes/end/end_node.py`，`EndNode._run`：每个声明的 key 都赋值，缺失变量对应 None（JSON null）。本地已有行为正确，保留实现并加断言。
 
 测试：`tests/control-semantics.test.mjs`；`--sample` 对真实 mature-ticket-triage.yml 的两个分支分别运行，使用实际 provider/Python 子进程和固定 LLM 回复（无网络、无模型调用）。修改前两个分支已经输出正确建议；没有观察到工单推测的样本错误。修改后结果应完全相同。
+
+## 样本前后对比
+
+输入工单：`退款尚未到账，请跟进。`，参数提取模型固定返回 priority=high / normal 和 keywords=[退款, 到账]，高优先级模型固定回复 `立即核查退款并联系客户。`。
+
+| 运行分支 | 修改前 advice（3f45384） | 修改后 advice |
+| --- | --- | --- |
+| high | 立即核查退款并联系客户。 | 立即核查退款并联系客户。 |
+| normal | 常规工单，按队列处理。 | 常规工单，按队列处理。 |
+
+两个分支的 reply 均包含对应建议及两行关键词 `· 退款`、`· 到账`，keywords 均为 `["退款", "到账"]`；完整输出保存在 [triage-semantics-comparison.json](triage-semantics-comparison.json)，前后深度比较一致。原样本已正确处理未执行分支（undefined），不能声称本次修复改变了其输出。
+
+重跑：`node tests/control-semantics.test.mjs --sample`。最终验证：`./tests/run-all.sh` → `ALL TESTS OK`。没有修改既有语义断言、诊断逻辑或依赖。

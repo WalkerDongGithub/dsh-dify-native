@@ -1,0 +1,42 @@
+{
+  "sample": "../dsl/mature-ticket-triage.yml",
+  "baseline": "3f45384",
+  "execution": "actual dify-node provider and Python; fixed LLM replies; both branches; offline",
+  "before": {
+    "high": {
+      "reply": "建议：立即核查退款并联系客户。\n关键词：\n· 退款\n· 到账",
+      "advice": "立即核查退款并联系客户。",
+      "keywords": [
+        "退款",
+        "到账"
+      ]
+    },
+    "normal": {
+      "reply": "建议：常规工单，按队列处理。\n关键词：\n· 退款\n· 到账",
+      "advice": "常规工单，按队列处理。",
+      "keywords": [
+        "退款",
+        "到账"
+      ]
+    }
+  },
+  "after": {
+    "high": {
+      "reply": "建议：立即核查退款并联系客户。\n关键词：\n· 退款\n· 到账",
+      "advice": "立即核查退款并联系客户。",
+      "keywords": [
+        "退款",
+        "到账"
+      ]
+    },
+    "normal": {
+      "reply": "建议：常规工单，按队列处理。\n关键词：\n· 退款\n· 到账",
+      "advice": "常规工单，按队列处理。",
+      "keywords": [
+        "退款",
+        "到账"
+      ]
+    }
+  },
+  "identical": true
+}
