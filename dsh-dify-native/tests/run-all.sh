@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the whole offline test suite (no harness, no network, no model calls).
+# Run unit tests and the installed-harness E2E suite (no model API calls).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,7 +17,10 @@ for test in \
   tests/tool-contracts.test.mjs \
   tests/tool-node.test.mjs \
   tests/structured-output.test.mjs \
-  tests/translation-script.test.mjs
+  tests/translation-script.test.mjs \
+  tests/container-scope.test.mjs \
+  tests/engine-e2e.test.mjs \
+  tests/engine-nested.test.mjs
 do
   echo "== $test"
   node "$test"
