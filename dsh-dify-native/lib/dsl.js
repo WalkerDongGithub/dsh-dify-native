@@ -1288,10 +1288,10 @@ export function compileGraph(parsed, options = {}) {
       spec.agentVersion = String(data.version ?? '1')
       spec.instruction = ''
       spec.query = ''
-      spec.tools = Array.isArray(params.tools)
-        ? params.tools.map((tool) => String(tool?.name ?? tool?.tool_name ?? tool?.provider_name ?? tool ?? ''))
-        : []
-      spec.toolsPolicy = { requested: spec.tools, mode: 'parsed, no tool loop in single-turn execution' }
+      spec.toolDeclarations = Array.isArray(params.tools) ? params.tools : []
+      spec.tools = spec.toolDeclarations.map(tool => typeof tool === 'string' ? tool : String(tool.tool_name ?? tool.name ?? ''))
+      spec.maxIterations = Number(params.maximum_iterations ?? 5)
+      spec.toolsPolicy = { requested: spec.tools, mode: spec.strategy === 'dsh-bounded-tools' ? 'bounded-declared-tools' : 'single-turn compatibility; native strategy unverified' }
       spec.outputSchema = data.output_schema ?? null
       spec.declaredOutputs = (data.agent_job?.declared_outputs ?? []).map((item) =>
         typeof item === 'string' ? item : String(item?.name ?? item?.variable ?? ''),

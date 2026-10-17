@@ -1499,35 +1499,56 @@ async function executeAgent(ctx, spec, request, env) {
   }
   if (prompt.length === 0) return { ok: false, error: `agent node ${spec.nodeId} has neither an instruction nor a query` }
   const system = instruction.length > 0 && query.length > 0 ? instruction : undefined
-  const call = await streamLlm(ctx, request, route, {
-    messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-    ...(system !== undefined ? { system } : {}),
-    temperature: typeof spec.temperature === 'number' ? spec.temperature : 0.3,
-    maxTokens: typeof spec.maxTokens === 'number' ? spec.maxTokens : undefined,
-  })
-  if (!call.ok) return { ok: false, error: `agent node ${spec.nodeId} ${call.error}` }
-  const outputs = { text: call.text, output: call.text, reasoning_content: call.reasoning, files: [], json: null }
+  const loop = spec.strategy === 'dsh-bounded-tools'
+  const maxIterations = loop ? Number(spec.maxIterations ?? 5) : 1
+  if (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 20) return { ok: false, error: `agent ${spec.nodeId}: maximum_iterations must be an integer 1..20` }
+  const tools = new Map((spec.toolDeclarations ?? []).map(item => {
+    const tool = typeof item === 'string' ? { tool_name: item } : item
+    return [String(tool.tool_name ?? tool.name), tool]
+  }))
+  const messages = [{ role: 'user', content: [{ type: 'text', text: prompt }] }]
+  if (loop) messages.push({ role: 'user', content: [{ type: 'text', text: 'Local dsh-bounded-tools protocol (not a Dify strategy plugin): request tools with {"tool_calls":[{"id":"unique","name":"tool_name","arguments":{}}]}; otherwise return your final answer. Declared tools: ' + JSON.stringify([...tools]) }] })
+  const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+  const executed = [], seen = new Set()
+  let call
+  for (let turn = 0; turn < maxIterations; turn++) {
+    if (request.signal?.aborted) return { ok: false, error: `agent ${spec.nodeId}: cancelled` }
+    call = await streamLlm(ctx, request, route, { messages, ...(system ? { system } : {}), temperature: spec.temperature ?? 0.3, maxTokens: spec.maxTokens })
+    if (!call.ok) return { ok: false, error: `agent node ${spec.nodeId} ${call.error}` }
+    for (const [camel, snake] of [['inputTokens','prompt_tokens'],['outputTokens','completion_tokens'],['totalTokens','total_tokens']]) {
+      const amount = Number(call.usage?.[camel] ?? call.usage?.[snake] ?? 0)
+      usage[camel] += amount; usage[snake] += amount
+    }
+    const envelope = extractJsonObject(call.text)
+    if (!loop || !envelope?.tool_calls) break
+    if (!Array.isArray(envelope.tool_calls) || envelope.tool_calls.length === 0) return { ok: false, error: `agent ${spec.nodeId}: tool_calls must be a nonempty array` }
+    const planned = []
+    // Validate the entire batch before any side effect.
+    for (const invocation of envelope.tool_calls) {
+      const id = invocation.id
+      if (typeof id !== 'string' || !id || seen.has(id)) return { ok: false, error: `agent ${spec.nodeId}: missing or duplicate tool call id ${id}` }
+      const declared = tools.get(invocation.name)
+      if (!declared) return { ok: false, error: `agent ${spec.nodeId}: tool ${invocation.name} is not declared` }
+      const schema = declared.parameters_schema ?? { type: 'object' }
+      const validator = new Ajv({ strict: false, allErrors: true }).compile(schema)
+      if (!validator(invocation.arguments)) return { ok: false, error: `agent ${spec.nodeId}: tool ${invocation.name} arguments fail schema: ${JSON.stringify(validator.errors)}` }
+      seen.add(id); planned.push({ invocation, declared })
+    }
+    messages.push({ role: 'assistant', content: [{ type: 'text', text: call.text }] })
+    for (const { invocation, declared } of planned) {
+      if (request.signal?.aborted) return { ok: false, error: `agent ${spec.nodeId}: cancelled` }
+      const result = await executeTool(ctx, { kind: 'tool', nodeId: spec.nodeId, provider: declared.provider_name ?? '', providerType: declared.provider_type ?? '', toolName: declared.tool_name ?? declared.name, arguments: invocation.arguments, configurations: declared.tool_configurations ?? {} }, request, env)
+      if (!result.ok) return { ok: false, error: `agent ${spec.nodeId}: tool ${invocation.name} failed: ${result.error}` }
+      executed.push({ id: invocation.id, name: invocation.name })
+      messages.push({ role: 'user', content: [{ type: 'text', text: JSON.stringify({ tool_result: invocation.id, outputs: result.outputs }) }] })
+    }
+    if (turn + 1 === maxIterations) return { ok: false, error: `agent ${spec.nodeId}: iteration limit ${maxIterations} reached; tool effects are not retried` }
+  }
   const json = extractJsonObject(call.text)
-  if (json !== undefined) {
-    outputs.json = json
-    for (const key of schemaKeys) if (json[key] !== undefined) outputs[key] = json[key]
-  }
-  return {
-    ok: true,
-    outputs,
-    meta: {
-      provider: route.provider,
-      model: route.model,
-      requested: spec.provider && spec.model ? `${spec.provider}/${spec.model}` : '',
-      routeSource: route.source,
-      strategy: spec.strategy ?? '',
-      mode: 'single-turn',
-      toolsRequested: Array.isArray(spec.tools) ? spec.tools : [],
-      toolsExecuted: [],
-      note: 'tool policy parsed; no autonomous tool loop in this runtime',
-      ...(schemaKeys.length > 0 ? { declaredOutputs: schemaKeys } : {}),
-    },
-  }
+  const outputs = { text: call.text, output: call.text, reasoning_content: call.reasoning, usage, files: [], json: json === undefined ? [{ data: [] }] : [json] }
+  if (json !== undefined) for (const key of schemaKeys) if (json[key] !== undefined) outputs[key] = json[key]
+  return { ok: true, outputs, meta: { provider: route.provider, model: route.model, requested: spec.provider && spec.model ? `${spec.provider}/${spec.model}` : '', routeSource: route.source, strategy: spec.strategy ?? '', mode: executed.length ? 'bounded-tool-loop' : 'single-turn', toolsRequested: spec.tools ?? [], toolsExecuted: executed, native_strategy: false, note: loop ? 'explicit local substitute strategy' : 'single-turn compatibility; native Dify strategy not executed' } }
+
 }
 
 /**

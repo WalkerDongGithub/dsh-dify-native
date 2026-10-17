@@ -51,7 +51,7 @@ form-demo 的聊天分支使用解析后 DSL 中预置的 conversation 默认值
 | full（有限部署协议） | llm、tool、http-request、list-operator | LLM 文本流；tool 执行部署声明契约或显式允许的 harness 工具；HTTP/列表仅限实现支持的选项。本次覆盖 tool 契约 HTTP，未用独立 http-request 节点证明所有 HTTP 模式 |
 | simplified（实例可能显示 full） | trigger、trigger-schedule、trigger-webhook、trigger-plugin | 将 run args 当事件载荷；不创建调度器、webhook listener 或 Dify 插件订阅。inspect 中 trigger-webhook 为 full 只指载荷注入实现 |
 | simplified | knowledge-retrieval | 真实 grep 本地目录 + 词法排序，非 embedding 检索；使用帮助分支实际执行并检查返回记录 |
-| simplified | agent | 单次模型调用，不执行自治工具循环；样本中实际执行并检查 toolsExecuted=[] |
+| 有限替代策略 | agent | 显式 dsh-bounded-tools 有界工具循环、白名单/schema/取消/usage；旧单轮兼容路径保留；原生插件策略仍 S |
 | 固定提取函数（有限格式） | document-extractor | PDFium 4.30.0、python-docx、pandas/openpyxl；8 种格式与官方纯函数逐字差分，数组/远程字节/失败已验；旧格式仍有 S 子项 |
 | 有限部署协议 | datasource / datasource-empty | sys 驱动 file/website 输出；声明式远端变量适配，插件参数不猜路径；records 扩展保留，原生插件仍 S |
 | simplified | human-input | 从参数选择动作，或选择第一个动作；不暂停等待真人。额外真实引擎用例分别执行 approve / reject 并检查最终值 |
@@ -107,3 +107,5 @@ DIFY_E2E_EVIDENCE=/tmp/dify-e2e-evidence.json node tests/engine-e2e.test.mjs
 TLS 4651731 已复核且真实引擎测试通过：false 单请求 curl --insecure，true/缺省校验证书，null 明确失败。
 
 #4 datasource / datasource-empty 基础项修复：真实引擎先复现 sys 被忽略而把 datasource_name 当文件路径，再通过 file/website/remote-contract/拒绝猜路径断言。另先复现损坏 JSONL 被吞错，再修复到节点失败。`tests/engine-datasource.test.mjs`，旧断言保留。
+
+#5 agent 基础项已修：`tests/engine-agent-loop.test.mjs` 先复现工具 JSON 被当最终文本，再真实引擎验证一次 HTTP 工具与回灌、未声明/schema/duplicate/limit/cancel；旧单轮断言未改。完整协议及 S 子项见 [agent-strategy.md](agent-strategy.md)。

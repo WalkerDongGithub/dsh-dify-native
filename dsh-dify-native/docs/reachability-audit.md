@@ -458,3 +458,5 @@ ALL TESTS OK
 TLS 4651731 已复核；start.config 在固定版本不存在，不凭空实现。#2/#3 RAG 继续按用户要求暂停。
 
 #4 基础项已修（2 个节点名）：系统变量、File/网站形状、独立声明式远端协议与插件边界；JSONL 吞错修复。原生 datasource 插件/认证源/文件存储仍 S 子项，见 datasource-contract.md，未标全兼容。
+
+#5 agent 基础循环已修，但原生策略插件、文件流、完整计费 usage、memory 等价仍 S 子项；不可把本地策略宣称全兼容。真实引擎证据见 engine-agent-loop.test.mjs 和 agent-strategy.md。

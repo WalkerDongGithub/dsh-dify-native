@@ -158,7 +158,7 @@ Dify **未来版本**新增的节点类型不在里面，会被当作未知类�
 | --- | --- | --- |
 | `knowledge-retrieval` | 在本地数据集目录上做词法 grep（含 CJK bigram） | **不是向量检索**，没有 embedding |
 | `tool` | 三选一：声明式 YAML 契约（一次 HTTP 请求 + 响应映射）/ 显式 opt-in 的宿主工具 passthrough / 拒绝 | **不支持 `.difypkg` 插件**（需要 plugin daemon）；没有名字猜测表；契约格式与限制见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md) |
-| `agent` | 单次模型回合 | **声明的 tools 不执行** |
+| `agent` | 显式 dsh-bounded-tools 有界工具循环；旧单轮路径保留 | 原生策略插件仍 S，见 [替代策略协议](docs/agent-strategy.md) |
 | `document-extractor` | 固定官方 PDFium / python-docx / pandas+openpyxl 提取；8 格式逐字差分验证 | 需显式安装轻量依赖；旧 Office/unstructured 链仍有 S 子项，不含 OCR |
 | `datasource` / `datasource-empty` | sys 驱动文件/网站信息 + 声明式远端桥；保留显式 local/file records | 原生插件/云账户尚未验证，见 [部署协议](docs/datasource-contract.md) |
 | `human-input` | 从运行参数或首个声明动作确定性解析 | **不支持暂停/恢复** |
