@@ -1746,7 +1746,10 @@ export function compileGraph(parsed, options = {}) {
         lines.push(`${pad}      throw new Error('iteration ${node.id} item failed: ' + ((__item && __item.error) || 'unknown error'))`)
       }
       lines.push(`${pad}    } else {`)
-      lines.push(`${pad}      ${outVar}.push(__item.value)`)
+      // Dify _execute_parallel_iterations filters all None values in remove
+      // mode, including successful null outputs; sequential mode keeps those.
+      if (removeAbnormal) lines.push(`${pad}      if (__item.value !== null) ${outVar}.push(__item.value)`)
+      else lines.push(`${pad}      ${outVar}.push(__item.value)`)
       lines.push(`${pad}    }`)
       lines.push(`${pad}  }`)
     } else {

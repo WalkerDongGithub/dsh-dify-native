@@ -67,6 +67,39 @@ if (process.argv.includes('--sample')) {
   ] } }), { a: null, b: 'B' })
   assert.deepEqual(grouped.nodes.agg.outputs, { first: { output: null }, second: { output: 'B' } })
   assert.deepEqual((await execute(aggregate({ advanced_settings: { group_enabled: false, groups: [] } }), { a: '' })).nodes.agg.outputs, { output: '' })
+  // IterationNode._run_single_iter / _execute_parallel_iterations:
+  // preserve slots for continue, omit failures for remove, fail container for terminated.
+  const iteration = (mode, is_parallel) => graph([
+    node('s', 'start', { variables: [{ variable: 'items' }] }),
+    node('iter', 'iteration', { iterator_selector: ['s', 'items'], output_selector: ['body', 'out'], error_handle_mode: mode, is_parallel, start_node_id: 'mark' }),
+    node('mark', 'iteration-start', { isInIteration: true, iteration_id: 'iter' }, 'iter'),
+    node('body', 'code', { isInIteration: true, iteration_id: 'iter', code_language: 'javascript', code: '', variables: [{ variable: 'x', value_selector: ['mark', 'item'] }] }, 'iter'),
+    node('e', 'end', { outputs: [{ variable: 'out', value_selector: ['iter', 'output'] }] }),
+  ], [edge('s', 'iter'), edge('iter', 'e'), edge('mark', 'body')])
+  for (const parallel of [false, true]) {
+    for (const mode of ['terminated', 'continue-on-error', 'remove-abnormal-output']) {
+      for (const items of [[1, 'fail', null, 3], ['fail', 'fail'], [], [null, 2]]) {
+        const calls = []
+        const run = () => execute(iteration(mode, parallel), { items }, async prompt => {
+          const x = JSON.parse(prompt).inputs.x
+          calls.push(x)
+          // Reverse completion order for parallel items; output must retain input order.
+          await new Promise(resolve => setTimeout(resolve, x === 1 ? 8 : 0))
+          return JSON.stringify(x === 'fail' ? { ok: false, error: 'semantic failure' } : { ok: true, outputs: { out: x } })
+        })
+        if (mode === 'terminated' && items.includes('fail')) {
+          await assert.rejects(run, /semantic failure/)
+          if (!parallel) assert.deepEqual(calls, items.slice(0, items.indexOf('fail') + 1), 'terminated stops subsequent sequential items')
+        } else {
+          let expected = items.map(x => x === 'fail' ? null : x)
+          if (mode === 'remove-abnormal-output') expected = parallel ? expected.filter(x => x !== null) : items.filter(x => x !== 'fail')
+          const result = await run()
+          assert.deepEqual(result.outputs.out, expected, `${mode}, parallel=${parallel}`)
+          assert.equal(result.nodes.iter.outputs.length, expected.length)
+        }
+      }
+    }
+  }
   await sample()
   console.log('CONTROL SEMANTICS TESTS OK')
 }
