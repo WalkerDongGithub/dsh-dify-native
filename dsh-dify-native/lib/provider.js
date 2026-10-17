@@ -24,7 +24,8 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import Ajv from 'ajv'
-import { basename, isAbsolute, join } from 'node:path'
+import { basename, extname, isAbsolute, join, resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { applyMemoryWindow, deriveChatHistory, memoryOptions, toPromptText } from './session-history.js'
 import { renderJinja } from './jinja.js'
 import { createToolRegistry, executeContract } from './tool-contracts.js'
@@ -1608,7 +1609,7 @@ const TEXT_EXTENSIONS = /\.(txt|md|markdown|csv|tsv|json|jsonl|yaml|yml|xml|html
 function resolveDocumentPath(value, workspaceRoot, env) {
   const raw = String(value ?? '')
   if (raw.length === 0) return undefined
-  const resolved = isAbsolute(raw) ? raw : join(workspaceRoot, raw)
+  const resolved = resolve(workspaceRoot, raw)
   const roots = [workspaceRoot, env.documentRoot].filter((root) => typeof root === 'string' && root.length > 0)
   if (!roots.some((root) => resolved === root || resolved.startsWith(`${root}/`))) return undefined
   return resolved
@@ -1621,71 +1622,45 @@ function resolveDocumentPath(value, workspaceRoot, env) {
  */
 async function executeDocumentExtractor(ctx, spec, request, env) {
   const files = spec.files
-  const list = Array.isArray(files) ? files : files === undefined || files === null ? [] : [files]
+  const list = Array.isArray(files) ? files : files == null ? [] : [files]
   const workspaceRoot = spec.workspaceRoot ?? request.parent?.session?.header?.cwd ?? process.cwd()
-  const web = typeof ctx.get === 'function' ? ctx.get('web') : undefined
   const extracted = []
-  for (const item of list) {
-    const name = stringify(item?.name ?? item?.filename ?? item?.url ?? item)
-    try {
-      if (typeof item === 'string' || typeof item === 'number') {
-        const path = resolveDocumentPath(item, workspaceRoot, env)
-        if (path === undefined) {
-          extracted.push({ name, text: '', error: `path is outside the workspace: ${stringify(item)}` })
-          continue
-        }
-        if (!existsSync(path)) {
-          extracted.push({ name, text: '', error: `file not found: ${path}` })
-          continue
-        }
-        if (!TEXT_EXTENSIONS.test(path)) {
-          extracted.push({ name, text: '', error: `unsupported document type (text-like files only): ${path}` })
-          continue
-        }
-        const content = readFileSync(path, 'utf8')
-        extracted.push({ name, text: content.length > 2_000_000 ? content.slice(0, 2_000_000) : content })
-        continue
-      }
+  try {
+    if (files == null) throw new Error('file variable is missing')
+    for (const item of list) {
+      const name = stringify(item?.filename ?? item?.name ?? item?.url ?? item)
       if (item?.text !== undefined || item?.content !== undefined) {
-        extracted.push({ name, text: stringify(item.text ?? item.content) })
+        extracted.push({ name, text: stringify(item.text ?? item.content), engine: 'inline-text-extension' })
         continue
       }
-      const remote = item?.url ?? item?.remote_url
+      const remote = item?.remote_url ?? item?.url
+      let bytes
+      let extension = item?.extension
       if (typeof remote === 'string' && /^https?:/i.test(remote)) {
-        if (web === undefined || typeof web.fetch !== 'function') {
-          extracted.push({ name, text: '', error: 'ctx.web is unavailable; cannot fetch a remote document' })
-          continue
-        }
-        const response = await web.fetch({ url: remote }, request.signal)
-        const text = stringify(response.body?.content ?? '')
-        extracted.push({ name, text, meta: { statusCode: response.statusCode } })
-        continue
-      }
-      const value = item?.file_path ?? item?.path ?? item?.local_path
-      if (value !== undefined) {
+        const response = await fetch(remote, { signal: request.signal })
+        if (!response.ok) throw new Error(`HTTP ${response.status} downloading ${remote}`)
+        bytes = Buffer.from(await response.arrayBuffer())
+        extension ||= extname(new URL(remote).pathname)
+        if (!extension) extension = ({ 'application/pdf': '.pdf', 'text/plain': '.txt', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx' })[item?.mime_type ?? response.headers.get('content-type')?.split(';')[0]]
+      } else {
+        const value = typeof item === 'string' ? item : item?.file_path ?? item?.path ?? item?.local_path
         const path = resolveDocumentPath(value, workspaceRoot, env)
-        if (path === undefined || !existsSync(path)) {
-          extracted.push({ name, text: '', error: `file not found under the workspace: ${stringify(value)}` })
-          continue
-        }
-        if (!TEXT_EXTENSIONS.test(path)) {
-          extracted.push({ name, text: '', error: `unsupported document type (text-like files only): ${path}` })
-          continue
-        }
-        extracted.push({ name, text: readFileSync(path, 'utf8').slice(0, 2_000_000) })
-        continue
+        if (!path) throw new Error(`file path missing or outside workspace: ${stringify(value)}`)
+        bytes = readFileSync(path)
+        extension ||= extname(path)
       }
-      extracted.push({ name, text: '', error: 'unrecognized file descriptor' })
-    } catch (error) {
-      extracted.push({ name, text: '', error: `${error?.name ?? 'Error'}: ${error?.message ?? String(error)}` })
+      const proc = await runChild([env.python, join(dirname(fileURLToPath(import.meta.url)), 'extract-document.py')], {
+        cwd: workspaceRoot, env: { ...process.env, ...(env.pythonPath ? { PYTHONPATH: [env.pythonPath, process.env.PYTHONPATH].filter(Boolean).join(':') } : {}) },
+        input: JSON.stringify({ bytes: bytes.toString('base64'), extension: extension ?? '' }), timeoutMs: 120_000, signal: request.signal,
+      })
+      if (proc.code !== 0 || proc.aborted || proc.timedOut || proc.spawnError) throw new Error(`extraction process failed (output limit 4 MiB, timeout 120s): ${proc.spawnError ?? proc.stderr ?? proc.code}`)
+      const result = JSON.parse(proc.stdout)
+      if (!result.ok) throw new Error(`${name}: ${result.error}`)
+      extracted.push({ name, text: result.text, engine: result.engine })
     }
-  }
-  const text = extracted.map((item) => item.text).filter((item) => item.length > 0).join('\n')
-  const failures = extracted.filter((item) => item.error !== undefined)
-  return {
-    ok: true,
-    outputs: { text, files: extracted, count: extracted.length },
-    meta: { extracted: extracted.length - failures.length, failed: failures.length, ...(failures.length > 0 ? { errors: failures.map((item) => item.error) } : {}) },
+    return { ok: true, outputs: { text: Array.isArray(files) ? extracted.map(x => x.text) : extracted[0].text, files: extracted, count: extracted.length }, meta: { extracted: extracted.length, failed: 0, engine: 'alternative-extraction', ocr: false, warning: 'extraction.alternative-engine' } }
+  } catch (error) {
+    return { ok: false, error: `document-extractor ${spec.nodeId}: ${error.message}` }
   }
 }
 

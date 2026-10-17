@@ -450,3 +450,9 @@ ALL TESTS OK
 ## 7. 本次交付边界
 
 仅新增本文件；源码、测试、依赖声明和 vendor 均未修改。工作区原有的 vendor/jieba、runs、tools 等未跟踪内容保留原样，不纳入提交。临时下载未装入运行环境；全量测试 exit 0、`ALL TESTS OK`。修复优先级与诊断方案供下一轮实施，不构成本轮已完成能力的承诺。
+
+## 2026-10-18 收尾批次 1（保留以上历史审计）
+
+#1 document-extractor 基础差距已修：数组保留 `text: string[]`，单文件为 string，任一文件错误使节点失败；删除静默截断；远程用原始 bytes 并检查 HTTP 状态。PDF 使用已装 PyMuPDF，DOCX/XLSX/PPTX 使用 stdlib OOXML 替代提取，标注 `extraction.alternative-engine`、ocr=false；XLSX 公式明确拒绝，旧 DOC/PPT/XLS/MSG/EPUB 完整转换链仍为 S 子项，未伪称全兼容。配置 Python 依赖缺失会给安装及 DIFY_RUNTIME_PYTHON/DIFY_PYTHONPATH 提示。
+
+依据仍为固定 cd47a47 的 `api/core/workflow/nodes/document_extractor/node.py`，`DocumentExtractorNode._run`、`_extract_text_from_file`、`_extract_text_from_docx`、`_extract_text_from_excel`。新增 `tests/engine-extraction.test.mjs` 先真实失败（alpha 字符串 vs 数组），再通过真实 workflowEngine.start 的数组、完整长文本、PDF/Office、远程 PDF、失败语义断言；旧测试断言未动。TLS 4651731 已复核并复跑真实引擎测试通过，false 单请求 curl --insecure，true/缺省仍校验证书，null 明确失败。start.config 在固定版不存在，不列成待实现字段。
