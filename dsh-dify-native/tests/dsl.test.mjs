@@ -275,4 +275,56 @@ workflow:
   console.log('ok 9 — iteration flatten_output flattens only when enabled')
 }
 
+// 10. code `dependencies` is forwarded into the node request (Dify declares the
+//     extra Python packages a code node imports) and is not reported as dropped.
+{
+  const yml = `
+app:
+  name: dep-probe
+  mode: workflow
+kind: app
+version: 0.1.0
+workflow:
+  graph:
+    nodes:
+      - id: s
+        data:
+          type: start
+          variables:
+            - variable: text
+              type: string
+              required: true
+      - id: c
+        data:
+          type: code
+          code_language: python3
+          code: |
+            import jieba
+            def main(text):
+                return {"tokens": list(jieba.cut(text))}
+          dependencies:
+            - jieba
+            - pandas==2.2.0
+      - id: e
+        data:
+          type: end
+          outputs:
+            - variable: out
+              value_selector: [c, tokens]
+    edges:
+      - { source: s, target: c }
+      - { source: c, target: e }
+`
+  const parsed = parseDifyDsl(yml)
+  const compiled = compileGraph(parsed)
+  assert.match(compiled.script, /"dependencies":\[\"jieba\",\"pandas==2\.2\.0\"\]/, 'dependencies must reach the node request')
+  const inspection = inspectGraph(parsed)
+  assert.equal(
+    (inspection.diagnostics ?? []).filter((row) => row.subject === 'c:dependencies').length,
+    0,
+    'dependencies is implemented, so it must not be reported as a dropped field',
+  )
+  console.log('ok 10 — code dependencies reach the provider request')
+}
+
 console.log('DSL TESTS OK')

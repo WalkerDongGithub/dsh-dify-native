@@ -123,7 +123,7 @@ const CONSUMED_FIELDS = {
   end: new Set(['outputs']),
   answer: new Set(['answer', 'variables']),
   llm: new Set(['model', 'prompt_template', 'variables', 'context', 'vision', 'memory']),
-  code: new Set(['code_language', 'code', 'variables', 'outputs']),
+  code: new Set(['code_language', 'code', 'variables', 'outputs', 'dependencies']),
   'if-else': new Set(['cases', 'logical_operator']),
   'question-classifier': new Set(['model', 'classes', 'query_variable_selector', 'instruction', 'instructions', 'topics', 'memory']),
   'http-request': new Set(['method', 'url', 'headers', 'params', 'body', 'authorization', 'error_strategy', 'default_value', 'timeout']),
@@ -1123,6 +1123,11 @@ export function compileGraph(parsed, options = {}) {
       spec.codeLanguage = data.code_language ?? 'python3'
       spec.code = data.code ?? ''
       spec.outputs = data.outputs ?? {}
+      // Dify lets a code node declare extra Python packages it imports. The
+      // compiler only forwards the declaration; the provider resolves it.
+      if (Array.isArray(data.dependencies) && data.dependencies.length > 0) {
+        spec.dependencies = data.dependencies.map((item) => String(item))
+      }
     } else if (kind === 'if-else') {
       for (const item of data.cases ?? []) {
         for (const condition of item.conditions ?? []) {

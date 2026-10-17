@@ -89,8 +89,71 @@ function killTree(child) {
   }
 }
 
-/** Run one confined child, capture stdio, and settle with its result. */
-function runChild(argv, { cwd, env, input, timeoutMs, signal }) {
+/**
+ * Make the Python packages a code node declares in `dependencies` importable.
+ *
+ * Dify ships a curated set of packages inside its own sandbox image; this
+ * runtime has no image to curate, so it installs on demand into the plugin's
+ * vendor directory — the same mechanism the shipped `json_repair` already uses.
+ * `pip --target` does the resolution and download; nothing here reinvents it.
+ *
+ * Idempotent: a package already importable from the vendor directory is skipped,
+ * so a repeated run costs one interpreter start, not a download.
+ *
+ * @param env - provider options carrying `python`, `pythonPath`, `vendorDir`.
+ * @param dependencies - package specs exactly as the DSL wrote them.
+ * @param signal - cancellation signal from the node request.
+ * @returns `{ ok: true }` once every package imports, else `{ ok: false, error }`.
+ */
+async function ensurePythonDependencies(env, dependencies, signal) {
+  const vendorDir = env.vendorDir
+  if (vendorDir === undefined || vendorDir.length === 0) {
+    return {
+      ok: false,
+      error: `no vendor directory to install into (set DSH_DIFY_RUNTIME_ROOT or DIFY_VENDOR_DIR)`,
+    }
+  }
+  const specs = dependencies.map((item) => String(item).trim()).filter((item) => item.length > 0)
+  if (specs.length === 0) return { ok: true }
+  // A declared spec may carry a version pin (`pandas==2.2.0`); the import name is
+  // the part before any of pip's requirement operators.
+  const importName = (spec) => String(spec).split(/[<>=!~[;\s]/)[0].replace(/-/g, '_')
+  const probe = ['-c', `import ${specs.map(importName).join(', ')}`]
+  const probeEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' }
+  if (vendorDir.length > 0) probeEnv.PYTHONPATH = [vendorDir, env.pythonPath].filter(Boolean).join(':')
+  const already = await runChild([env.python, ...probe], {
+    cwd: vendorDir,
+    env: probeEnv,
+    input: '',
+    timeoutMs: 20_000,
+    signal,
+  })
+  if (already.code === 0) return { ok: true }
+
+  const proc = await runChild(
+    [env.python, '-m', 'pip', 'install', '--quiet', '--disable-pip-version-check', '--target', vendorDir, ...specs],
+    { cwd: vendorDir, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: '', timeoutMs: 180_000, signal },
+  )
+  if (proc.spawnError) return { ok: false, error: `cannot start pip: ${proc.spawnError}` }
+  if (proc.timedOut) return { ok: false, error: `pip install timed out for ${specs.join(', ')}` }
+  if (proc.aborted) return { ok: false, error: `pip install cancelled for ${specs.join(', ')}` }
+  if (proc.code !== 0) {
+    return { ok: false, error: `pip install failed for ${specs.join(', ')}: ${(proc.stderr || proc.stdout).slice(-1500)}` }
+  }
+  const after = await runChild([env.python, ...probe], {
+    cwd: vendorDir,
+    env: probeEnv,
+    input: '',
+    timeoutMs: 20_000,
+    signal,
+  })
+  if (after.code !== 0) {
+    return { ok: false, error: `installed ${specs.join(', ')} but they still do not import: ${after.stderr.slice(-800)}` }
+  }
+  return { ok: true }
+}
+
+/** Run one confined child, capture stdio, and settle with its result. */function runChild(argv, { cwd, env, input, timeoutMs, signal }) {
   return new Promise((resolve) => {
     let child
     try {
@@ -143,6 +206,9 @@ function runChild(argv, { cwd, env, input, timeoutMs, signal }) {
 export function createDifyNodeProvider(ctx, options = {}) {
   const python = options.python ?? process.env.DIFY_RUNTIME_PYTHON ?? 'python3'
   const pythonPath = options.pythonPath ?? process.env.DIFY_PYTHONPATH ?? ''
+  // Where `dependencies` are installed. Defaults to the vendor directory the
+  // shipped Python packages already live in, so there is one import root.
+  const vendorDir = options.vendorDir ?? process.env.DIFY_VENDOR_DIR ?? pythonPath
   const llmProvider = options.llmProvider ?? process.env.DIFY_LLM_PROVIDER ?? ''
   const llmModel = options.llmModel ?? process.env.DIFY_LLM_MODEL ?? ''
   const knowledgeRoot = options.knowledgeRoot ?? process.env.DIFY_KNOWLEDGE_ROOT ?? ''
@@ -184,6 +250,7 @@ export function createDifyNodeProvider(ctx, options = {}) {
           payload = await executeSpec(ctx, spec, request, {
             python,
             pythonPath,
+            vendorDir,
             llmProvider,
             llmModel,
             knowledgeRoot,
@@ -283,6 +350,17 @@ async function executeCode(ctx, spec, request, env) {
   const childEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' }
   if (env.pythonPath) childEnv.PYTHONPATH = [env.pythonPath, childEnv.PYTHONPATH].filter(Boolean).join(':')
   for (const [key, value] of Object.entries(spec.env ?? {})) childEnv[key] = String(value)
+  // Dify's `dependencies`: packages the node declares it imports. They are
+  // installed into the plugin's own vendor directory (the same place the
+  // shipped `json_repair` lives), so the confined child finds them through
+  // PYTHONPATH without touching the system interpreter.
+  if (isPython && Array.isArray(spec.dependencies) && spec.dependencies.length > 0) {
+    const resolved = await ensurePythonDependencies(env, spec.dependencies, request.signal)
+    if (!resolved.ok) {
+      return { ok: false, error: `code node ${spec.nodeId} dependencies: ${resolved.error}` }
+    }
+    if (env.pythonPath) childEnv.PYTHONPATH = [env.pythonPath, childEnv.PYTHONPATH].filter(Boolean).join(':')
+  }
   const proc = await runChild(confined.argv, {
     cwd: workspaceRoot,
     env: childEnv,
