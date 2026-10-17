@@ -1,0 +1,4 @@
+# dsh-dify-native bundle patch: mount this package into the profile tree.
+- insert:
+    - id: dsh-dify-native
+      name: 'dsh-dify-native'

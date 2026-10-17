@@ -1,0 +1,33 @@
+{
+  "status": "rejected",
+  "error": "unsupported node types: llm/1721110597868",
+  "appName": "SEO Slug Generator",
+  "nodeCount": 3,
+  "nodeTypes": {
+    "start": 1,
+    "llm": 1,
+    "end": 1
+  },
+  "startInputs": [
+    "title"
+  ],
+  "endOutputs": [
+    "output"
+  ],
+  "unsupported": [
+    {
+      "id": "1721110597868",
+      "type": "llm",
+      "title": "LLM"
+    }
+  ],
+  "issues": [
+    "unsupported node types: llm/1721110597868"
+  ],
+  "nodeIds": [
+    "1721110595591",
+    "1721110597868",
+    "1721110634700"
+  ],
+  "durationMs": 9
+}

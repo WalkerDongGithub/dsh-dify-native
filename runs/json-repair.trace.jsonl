@@ -1,0 +1,5 @@
+{"event": "run-start", "runId": "dify-1792235869-3dd56423", "workflow": "json-repair", "mode": "workflow", "order": ["1732007415808", "1732007419308", "1732007423290"]}
+{"node": "1732007415808", "type": "start", "title": "开始", "status": "success", "branch": null, "outputs": {"llm_string": "{\"name\": \"dify\", \"items\": [1,2,], }"}, "activeEdges": [{"source": "1732007415808", "target": "1732007419308", "sourceHandle": "source"}], "durationMs": 0.0}
+{"node": "1732007419308", "type": "code", "title": "代码执行", "status": "success", "branch": null, "outputs": {"result": "{\"name\": \"dify\", \"items\": [1, 2]}"}, "activeEdges": [{"source": "1732007419308", "target": "1732007423290", "sourceHandle": "source"}], "durationMs": 117.5}
+{"node": "1732007423290", "type": "end", "title": "结束", "status": "success", "branch": null, "outputs": {"output": "{\"name\": \"dify\", \"items\": [1, 2]}"}, "meta": {"terminal": "end"}, "activeEdges": [], "durationMs": 0.0}
+{"event": "run-finish", "status": "succeeded", "durationMs": 117.7}

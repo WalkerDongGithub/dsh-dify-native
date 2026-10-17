@@ -1,0 +1,117 @@
+{
+  "ir_version": "1.0",
+  "source": {
+    "path": "/home/walker/dify-test/dsh-dify-runtime/../dsl/json-repair.yml",
+    "difyVersion": "0.1.2",
+    "appName": "json-repair",
+    "mode": "workflow"
+  },
+  "start": {
+    "id": "1732007415808",
+    "inputs": [
+      "llm_string"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "1732007415808",
+      "type": "start",
+      "title": "开始",
+      "adapter": "start",
+      "status": "supported",
+      "data": {
+        "desc": "",
+        "selected": false,
+        "title": "开始",
+        "type": "start",
+        "variables": [
+          {
+            "label": "llm_string",
+            "max_length": 10000,
+            "options": [],
+            "required": true,
+            "type": "paragraph",
+            "variable": "llm_string"
+          }
+        ]
+      }
+    },
+    {
+      "id": "1732007419308",
+      "type": "code",
+      "title": "代码执行",
+      "adapter": "code",
+      "status": "supported",
+      "data": {
+        "code": "import json_repair\nimport json\n\ndef main(llm_string):\n    new_string = json_repair.repair_json(llm_string, ensure_ascii=False)\n    return {\n        \"result\": new_string\n    }\n",
+        "code_language": "python3",
+        "desc": "",
+        "outputs": {
+          "result": {
+            "children": null,
+            "type": "string"
+          }
+        },
+        "selected": true,
+        "title": "代码执行",
+        "type": "code",
+        "variables": [
+          {
+            "value_selector": [
+              "1732007415808",
+              "llm_string"
+            ],
+            "variable": "llm_string"
+          }
+        ]
+      }
+    },
+    {
+      "id": "1732007423290",
+      "type": "end",
+      "title": "结束",
+      "adapter": "end",
+      "status": "supported",
+      "data": {
+        "desc": "",
+        "outputs": [
+          {
+            "value_selector": [
+              "1732007419308",
+              "result"
+            ],
+            "variable": "output"
+          }
+        ],
+        "selected": false,
+        "title": "结束",
+        "type": "end"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "1732007415808",
+      "target": "1732007419308",
+      "sourceHandle": "source",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1732007419308",
+      "target": "1732007423290",
+      "sourceHandle": "source",
+      "targetHandle": "target"
+    }
+  ],
+  "executionOrder": [
+    "1732007415808",
+    "1732007419308",
+    "1732007423290"
+  ],
+  "variables": {
+    "environment": [],
+    "conversation": []
+  },
+  "unsupported": [],
+  "issues": []
+}

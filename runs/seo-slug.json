@@ -1,0 +1,72 @@
+{
+  "runId": "dify-1792235869-8c9415a5",
+  "status": "succeeded",
+  "outputs": {
+    "output": "build-dify-workflow-small-server"
+  },
+  "answers": [],
+  "nodes": {
+    "1721110595591": {
+      "node": "1721110595591",
+      "type": "start",
+      "title": "Start",
+      "status": "success",
+      "branch": null,
+      "outputs": {
+        "title": "Build a Dify workflow on a small server"
+      },
+      "activeEdges": [
+        {
+          "source": "1721110595591",
+          "target": "1721110597868",
+          "sourceHandle": "source"
+        }
+      ],
+      "durationMs": 0.0
+    },
+    "1721110597868": {
+      "node": "1721110597868",
+      "type": "llm",
+      "title": "LLM",
+      "status": "success",
+      "branch": null,
+      "outputs": {
+        "text": "build-dify-workflow-small-server",
+        "usage": "{\"completion_tokens\": 8, \"prompt_tokens\": 115, \"prompt_tokens_details\": {\"cached_tokens\": 114}, \"total_tokens\": 123}",
+        "reasoning_content": ""
+      },
+      "meta": {
+        "model": "glm-4.5-air",
+        "requested": "deepseek/deepseek-chat"
+      },
+      "activeEdges": [
+        {
+          "source": "1721110597868",
+          "target": "1721110634700",
+          "sourceHandle": "source"
+        }
+      ],
+      "durationMs": 748.6
+    },
+    "1721110634700": {
+      "node": "1721110634700",
+      "type": "end",
+      "title": "End",
+      "status": "success",
+      "branch": null,
+      "outputs": {
+        "output": "build-dify-workflow-small-server"
+      },
+      "meta": {
+        "terminal": "end"
+      },
+      "activeEdges": [],
+      "durationMs": 0.0
+    }
+  },
+  "error": null,
+  "durationMs": 748.7,
+  "usage": {
+    "llmCalls": 1
+  }
+}

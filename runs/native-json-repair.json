@@ -1,0 +1,39 @@
+{
+  "status": "succeeded",
+  "stopReason": "completed",
+  "error": "",
+  "appName": "json-repair",
+  "outputs": {
+    "output": "{\"a\": 1, \"b\": [1, 2]}"
+  },
+  "nodes": {
+    "1732007419308": {
+      "ok": true,
+      "outputs": {
+        "result": "{\"a\": 1, \"b\": [1, 2]}"
+      },
+      "exitCode": 0,
+      "enforcement": "partial",
+      "backendArgv0": "/home/walker/node/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run",
+      "stderr": "landlock-run: partial enforcement (older Landlock ABI)\n",
+      "durationMs": 81
+    }
+  },
+  "agentsStarted": 1,
+  "events": [
+    {
+      "at": "start",
+      "label": "code:代码执行",
+      "phase": "dify:json-repair",
+      "seq": 1
+    },
+    {
+      "at": "end",
+      "label": "code:代码执行",
+      "outcome": "completed",
+      "seq": 1
+    }
+  ],
+  "script": "phase(\"dify:json-repair\")\nconst __nodes = {}\nconst __in0 = {\"llm_string\": args[\"llm_string\"]}\nconst __req0 = {\"kind\":\"code\",\"nodeId\":\"1732007419308\",\"title\":\"代码执行\",\"codeLanguage\":\"python3\",\"code\":\"import json_repair\\nimport json\\n\\ndef main(llm_string):\\n    new_string = json_repair.repair_json(llm_string, ensure_ascii=False)\\n    return {\\n        \\\"result\\\": new_string\\n    }\\n\",\"inputs\":{},\"timeoutMs\":120000}\n__req0.inputs = __in0\nconst __raw0 = await agent(JSON.stringify(__req0), { label: \"code:代码执行\" })\nif (__raw0 === null) throw new Error('dify node 1732007419308 (code:代码执行) failed: no result from provider')\nconst __r0 = JSON.parse(__raw0)\nif (!__r0.ok) throw new Error('dify node 1732007419308 (code:代码执行) failed: ' + (__r0.error ?? 'unknown error'))\n__nodes[\"1732007419308\"] = __r0\nconst __outputs = {\"output\": __r0.outputs[\"result\"]}\nreturn { nodes: __nodes, outputs: typeof __outputs === 'undefined' ? {} : __outputs }",
+  "durationMs": 395
+}

@@ -1,0 +1,34 @@
+# ---- 依赖 / 构建噪音 ----
+# 无斜杠：同时匹配目录和指向共享 node_modules 的符号链接
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---- 运行临时目录 ----
+# runs/ 下的 *.json / *.jsonl / *.md 是验证证据，保留入库；
+# 下列沙箱/探针临时目录是一次性产物，不入库。
+runs/sandbox-*/
+runs/.dify-probe-*/
+runs/.dify-*/
+tmp/
+*.log
+
+# ---- 密钥 / 本地环境 ----
+.env
+.env.*
+*.token
+.credentials*
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,10 @@
+{
+  "runId": "dify-1792235883-808166db",
+  "status": "rejected",
+  "outputs": {},
+  "answers": [],
+  "nodes": {},
+  "error": "workflow rejected before execution: unsupported-node: tool (17310793844280); unsupported-node: tool (17310794023810); unsupported-node: tool (1732344950523)",
+  "durationMs": 0.1,
+  "usage": {}
+}

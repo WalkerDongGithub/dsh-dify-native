@@ -1,0 +1,339 @@
+{
+  "ir_version": "1.0",
+  "source": {
+    "path": "/home/walker/dify-test/dsh-dify-runtime/../dsl/form-demo.yml",
+    "difyVersion": "0.1.3",
+    "appName": "Form表单聊天Demo",
+    "mode": "advanced-chat"
+  },
+  "start": {
+    "id": "1729841263487",
+    "inputs": []
+  },
+  "nodes": [
+    {
+      "id": "1729841263487",
+      "type": "start",
+      "title": "Start",
+      "adapter": "start",
+      "status": "supported",
+      "data": {
+        "desc": "",
+        "selected": true,
+        "title": "Start",
+        "type": "start",
+        "variables": []
+      }
+    },
+    {
+      "id": "1730163641212",
+      "type": "template-transform",
+      "title": "登录表单",
+      "adapter": "template-transform",
+      "status": "supported",
+      "data": {
+        "desc": "",
+        "selected": false,
+        "template": "<form data-format=\"json\">\n  <label for=\"username\">Username:</label>\n  <input type=\"text\" name=\"username\" />\n  <label for=\"password\">Password:</label>\n  <input type=\"password\" name=\"password\" />\n  <button data-size=\"small\" data-variant=\"primary\">Login</button>\n</form>",
+        "title": "登录表单",
+        "type": "template-transform",
+        "variables": []
+      }
+    },
+    {
+      "id": "1731378296917",
+      "type": "answer",
+      "title": "直接回复 2",
+      "adapter": "answer",
+      "status": "supported",
+      "data": {
+        "answer": "初次使用，请登录员工账号和密码哦。\n\n{{#1730163641212.output#}}",
+        "desc": "",
+        "selected": false,
+        "title": "直接回复 2",
+        "type": "answer",
+        "variables": []
+      }
+    },
+    {
+      "id": "1731378486318",
+      "type": "llm",
+      "title": "LLM",
+      "adapter": "llm",
+      "status": "supported",
+      "data": {
+        "context": {
+          "enabled": false,
+          "variable_selector": []
+        },
+        "desc": "",
+        "model": {
+          "completion_params": {
+            "temperature": 0.7
+          },
+          "mode": "chat",
+          "name": "gpt-4o-mini",
+          "provider": "openai_api_compatible"
+        },
+        "prompt_template": [
+          {
+            "id": "216843e4-021e-4655-8d6f-b527e193a06b",
+            "role": "system",
+            "text": "你是个聊天机器人"
+          },
+          {
+            "role": "user",
+            "text": "{{#sys.query#}}"
+          }
+        ],
+        "selected": false,
+        "title": "LLM",
+        "type": "llm",
+        "variables": [],
+        "vision": {
+          "enabled": false
+        }
+      }
+    },
+    {
+      "id": "1731378500668",
+      "type": "answer",
+      "title": "直接回复 2",
+      "adapter": "answer",
+      "status": "supported",
+      "data": {
+        "answer": "{{#1731378486318.text#}}",
+        "desc": "",
+        "selected": false,
+        "title": "直接回复 2",
+        "type": "answer",
+        "variables": []
+      }
+    },
+    {
+      "id": "1731378644337",
+      "type": "code",
+      "title": "登录",
+      "adapter": "code",
+      "status": "supported",
+      "data": {
+        "code": "import json,requests\n\ndef main(input_string):\n    try:\n        data = json.loads(input_string)\n        username = data['username']\n        password = data['password']\n        #这里可以验证是否登录成功，返回user_token和status，假设username=svcvit为登录成功\n        #response_data = requests.post(\"\")\n        if username == \"svcvit\":\n            return {\"is_login\":1,\"user_token\":\"user_token_test\"}\n        else:\n            return {\"is_login\":0,\"user_token\":\"\"}\n    except:\n        return {\"is_login\":0,\"user_token\":\"\"}\n",
+        "code_language": "python3",
+        "desc": "",
+        "outputs": {
+          "is_login": {
+            "children": null,
+            "type": "number"
+          },
+          "user_token": {
+            "children": null,
+            "type": "string"
+          }
+        },
+        "selected": false,
+        "title": "登录",
+        "type": "code",
+        "variables": [
+          {
+            "value_selector": [
+              "sys",
+              "query"
+            ],
+            "variable": "input_string"
+          }
+        ]
+      }
+    },
+    {
+      "id": "1731378918101",
+      "type": "if-else",
+      "title": "user_token",
+      "adapter": "if-else",
+      "status": "supported",
+      "data": {
+        "cases": [
+          {
+            "case_id": "true",
+            "conditions": [
+              {
+                "comparison_operator": "empty",
+                "id": "c186fbe2-078d-4c96-b45b-cd1a3d22c1f6",
+                "value": "",
+                "varType": "string",
+                "variable_selector": [
+                  "conversation",
+                  "user_token"
+                ]
+              }
+            ],
+            "id": "true",
+            "logical_operator": "and"
+          }
+        ],
+        "desc": "",
+        "selected": false,
+        "title": "user_token",
+        "type": "if-else"
+      }
+    },
+    {
+      "id": "1731379076735",
+      "type": "assigner",
+      "title": "变量赋值",
+      "adapter": "assigner",
+      "status": "supported",
+      "data": {
+        "assigned_variable_selector": [
+          "conversation",
+          "user_token"
+        ],
+        "desc": "",
+        "input_variable_selector": [
+          "1731378644337",
+          "user_token"
+        ],
+        "selected": false,
+        "title": "变量赋值",
+        "type": "assigner",
+        "write_mode": "over-write"
+      }
+    },
+    {
+      "id": "1731379291700",
+      "type": "if-else",
+      "title": "是否登录成功",
+      "adapter": "if-else",
+      "status": "supported",
+      "data": {
+        "cases": [
+          {
+            "case_id": "true",
+            "conditions": [
+              {
+                "comparison_operator": "=",
+                "id": "d53711d6-bf99-4a90-ba67-96de51cf3a62",
+                "value": "1",
+                "varType": "number",
+                "variable_selector": [
+                  "1731378644337",
+                  "is_login"
+                ]
+              }
+            ],
+            "id": "true",
+            "logical_operator": "and"
+          }
+        ],
+        "desc": "",
+        "selected": false,
+        "title": "是否登录成功",
+        "type": "if-else"
+      }
+    },
+    {
+      "id": "1731379313752",
+      "type": "answer",
+      "title": "直接回复 3",
+      "adapter": "answer",
+      "status": "supported",
+      "data": {
+        "answer": "登录成功，我们聊点什么？",
+        "desc": "",
+        "selected": false,
+        "title": "直接回复 3",
+        "type": "answer",
+        "variables": []
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "1730163641212",
+      "target": "1731378296917",
+      "sourceHandle": "source",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1731378486318",
+      "target": "1731378500668",
+      "sourceHandle": "source",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1729841263487",
+      "target": "1731378918101",
+      "sourceHandle": "source",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1731378644337",
+      "target": "1731379291700",
+      "sourceHandle": "source",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1731379291700",
+      "target": "1731379076735",
+      "sourceHandle": "true",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1731379076735",
+      "target": "1731379313752",
+      "sourceHandle": "source",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1731379291700",
+      "target": "1730163641212",
+      "sourceHandle": "false",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1731378918101",
+      "target": "1731378644337",
+      "sourceHandle": "true",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1731378918101",
+      "target": "1731378486318",
+      "sourceHandle": "false",
+      "targetHandle": "target"
+    }
+  ],
+  "executionOrder": [
+    "1729841263487",
+    "1731378918101",
+    "1731378486318",
+    "1731378500668",
+    "1731378644337",
+    "1731379291700",
+    "1730163641212",
+    "1731378296917",
+    "1731379076735",
+    "1731379313752"
+  ],
+  "variables": {
+    "environment": [
+      {
+        "description": "",
+        "id": "c086ca90-39e9-44e8-b249-93124d45499a",
+        "name": "login",
+        "value": 0,
+        "value_type": "number"
+      }
+    ],
+    "conversation": [
+      {
+        "description": "",
+        "id": "db80e372-91ed-4718-b55c-1808a968865e",
+        "name": "user_token",
+        "value": "",
+        "value_type": "string"
+      }
+    ]
+  },
+  "unsupported": [],
+  "issues": []
+}

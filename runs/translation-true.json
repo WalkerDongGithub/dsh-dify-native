@@ -1,0 +1,167 @@
+{
+  "runId": "dify-1792235871-623ac3a2",
+  "status": "succeeded",
+  "outputs": {
+    "output": "那只敏捷的棕色狐狸跳过了懒惰的狗。"
+  },
+  "answers": [],
+  "nodes": {
+    "1721117927142": {
+      "node": "1721117927142",
+      "type": "start",
+      "title": "开始",
+      "status": "success",
+      "branch": null,
+      "outputs": {
+        "target_lang": "Chinese",
+        "source_text": "The quick brown fox jumps over the lazy dog.",
+        "source_lang": "English",
+        "country": ""
+      },
+      "activeEdges": [
+        {
+          "source": "1721117927142",
+          "target": "1721117961155",
+          "sourceHandle": "source"
+        }
+      ],
+      "durationMs": 0.0
+    },
+    "1721117961155": {
+      "node": "1721117961155",
+      "type": "llm",
+      "title": "TRANSLATION",
+      "status": "success",
+      "branch": null,
+      "outputs": {
+        "text": "那只敏捷的棕色狐狸跳过了懒惰的狗。",
+        "usage": "{\"completion_tokens\": 12, \"prompt_tokens\": 75, \"prompt_tokens_details\": {\"cached_tokens\": 74}, \"total_tokens\": 87}",
+        "reasoning_content": ""
+      },
+      "meta": {
+        "model": "glm-4.5-air",
+        "requested": "deepseek/deepseek-chat"
+      },
+      "activeEdges": [
+        {
+          "source": "1721117961155",
+          "target": "1721118545228",
+          "sourceHandle": "source"
+        }
+      ],
+      "durationMs": 747.1
+    },
+    "1721118545228": {
+      "node": "1721118545228",
+      "type": "if-else",
+      "title": "COUNTRY IS NULL",
+      "status": "success",
+      "branch": "true",
+      "outputs": {
+        "result": true
+      },
+      "activeEdges": [
+        {
+          "source": "1721118545228",
+          "target": "1721118559807",
+          "sourceHandle": "true"
+        }
+      ],
+      "durationMs": 0.0
+    },
+    "1721118668192": {
+      "node": "1721118668192",
+      "type": "llm",
+      "title": "EXPERT_SUGGESTIONS_WITH_COUNTRY",
+      "status": "skipped",
+      "reason": "inactive incoming branch"
+    },
+    "1721118559807": {
+      "node": "1721118559807",
+      "type": "llm",
+      "title": "EXPERT_SUGGESTIONS",
+      "status": "success",
+      "branch": null,
+      "outputs": {
+        "text": "1. For accuracy: The translation is accurate in meaning and doesn't add, omit, or mistranslate any elements of the source text.\n\n2. For style: The translation maintains the simple, declarative style of the original sentence. The adjectives ... <663 chars>",
+        "usage": "{\"completion_tokens\": 137, \"prompt_tokens\": 270, \"prompt_tokens_details\": {\"cached_tokens\": 91}, \"total_tokens\": 407}",
+        "reasoning_content": ""
+      },
+      "meta": {
+        "model": "glm-4.5-air",
+        "requested": "deepseek/deepseek-chat",
+        "adapterNote": "added neutral user turn for system-only prompt"
+      },
+      "activeEdges": [
+        {
+          "source": "1721118559807",
+          "target": "1721118847307",
+          "sourceHandle": "source"
+        }
+      ],
+      "durationMs": 4584.7
+    },
+    "1721118847307": {
+      "node": "1721118847307",
+      "type": "variable-aggregator",
+      "title": "SUGGESTIONS",
+      "status": "success",
+      "branch": null,
+      "outputs": {
+        "output": "1. For accuracy: The translation is accurate in meaning and doesn't add, omit, or mistranslate any elements of the source text.\n\n2. For style: The translation maintains the simple, declarative style of the original sentence. The adjectives ... <663 chars>"
+      },
+      "activeEdges": [
+        {
+          "source": "1721118847307",
+          "target": "1721118907775",
+          "sourceHandle": "source"
+        }
+      ],
+      "durationMs": 0.0
+    },
+    "1721118907775": {
+      "node": "1721118907775",
+      "type": "llm",
+      "title": "IMPORVE_TRANSLATE",
+      "status": "success",
+      "branch": null,
+      "outputs": {
+        "text": "那只敏捷的棕色狐狸跳过了懒惰的狗。",
+        "usage": "{\"completion_tokens\": 12, \"prompt_tokens\": 412, \"prompt_tokens_details\": {\"cached_tokens\": 130}, \"total_tokens\": 424}",
+        "reasoning_content": ""
+      },
+      "meta": {
+        "model": "glm-4.5-air",
+        "requested": "deepseek/deepseek-chat"
+      },
+      "activeEdges": [
+        {
+          "source": "1721118907775",
+          "target": "1721119092752",
+          "sourceHandle": "source"
+        }
+      ],
+      "durationMs": 706.0
+    },
+    "1721119092752": {
+      "node": "1721119092752",
+      "type": "end",
+      "title": "结束",
+      "status": "success",
+      "branch": null,
+      "outputs": {
+        "output": "那只敏捷的棕色狐狸跳过了懒惰的狗。"
+      },
+      "meta": {
+        "terminal": "end"
+      },
+      "activeEdges": [],
+      "durationMs": 0.0
+    }
+  },
+  "error": null,
+  "durationMs": 6038.2,
+  "usage": {
+    "llmCalls": 3
+  }
+}

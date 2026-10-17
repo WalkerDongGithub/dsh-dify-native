@@ -1,0 +1,59 @@
+{
+  "generatedAt": "2026-10-17T19:18:52",
+  "workflows": [
+    {
+      "file": "dsl/json-repair.yml",
+      "status": "succeeded",
+      "llmCalls": 0,
+      "tokens": 0,
+      "outputs": {
+        "output": "{\"name\": \"dify\", \"items\": [1, 2]}"
+      }
+    },
+    {
+      "file": "dsl/seo-slug.yml",
+      "status": "succeeded",
+      "llmCalls": 1,
+      "tokens": 123,
+      "outputs": {
+        "output": "build-dify-workflow-small-server"
+      }
+    },
+    {
+      "file": "dsl/translation.yml (country empty / true branch)",
+      "status": "succeeded",
+      "llmCalls": 3,
+      "tokens": 918,
+      "outputs": {
+        "output": "那只敏捷的棕色狐狸跳过了懒惰的狗。"
+      }
+    },
+    {
+      "file": "dsl/translation.yml (country set / false branch)",
+      "status": "succeeded",
+      "llmCalls": 3,
+      "tokens": 751,
+      "outputs": {
+        "output": "Bom dia, como você está?"
+      }
+    },
+    {
+      "file": "dsl/form-demo.yml",
+      "status": "succeeded",
+      "llmCalls": 0,
+      "tokens": 0,
+      "outputs": [
+        "初次使用，请登录员工账号和密码哦。\n\n<form data-format=\"json\">\n  <label for=\"username\">Username:</label>\n  <input type=\"text\" name=\"username\" />\n  <label for=\"password\">Password:</label>\n  <input type=\"password\" name=\"password\" />\n  <button data-size=\"small\" data-variant=\"primary\">Login</button>\n</form>"
+      ]
+    },
+    {
+      "file": "dsl/lang-consistency.yml",
+      "status": "rejected",
+      "llmCalls": 0,
+      "tokens": 0,
+      "outputs": []
+    }
+  ],
+  "totalLlmCalls": 7,
+  "totalTokens": 1792
+}

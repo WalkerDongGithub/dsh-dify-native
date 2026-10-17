@@ -1,0 +1,5 @@
+# dsh-dify-runtime bundle patch: mount this package into the profile tree,
+# where its `apply` registers dify_inspect / dify_translate / dify_run.
+- insert:
+    - id: dsh-dify-runtime
+      name: 'dsh-dify-runtime'

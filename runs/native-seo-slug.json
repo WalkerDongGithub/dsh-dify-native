@@ -1,0 +1,56 @@
+{
+  "status": "succeeded",
+  "stopReason": "completed",
+  "error": "",
+  "appName": "SEO Slug Generator",
+  "outputs": {
+    "output": "run-dify-workflow-on-small-server-without-rewriting"
+  },
+  "nodes": {
+    "1721110597868": {
+      "ok": true,
+      "outputs": {
+        "text": "run-dify-workflow-on-small-server-without-rewriting",
+        "usage": {
+          "inputTokens": 114,
+          "outputTokens": 347,
+          "totalTokens": 465,
+          "cacheReadTokens": 4
+        },
+        "reasoning_content": "\nThe user wants me to create an SEO-friendly URL slug from the title \"How to run a mature Dify workflow on a small server without rewriting the harness\". Let me follow my guidelines:\n\n1. First, I need to condense the input into an English phrase if it's too long (over 60 characters).\n2. Then, I'll remove any special characters.\n3. Finally, I'll create a URL slug that clearly conveys the original meaning while being concise.\n\nLet's count the characters in the original title: \"How to run a mature Dify workflow on a small server without rewriting the harness\" - that's 85 characters, which exceeds the 60-character limit.\n\nNow I need to condense this into a shorter phrase that captures the essence:\n\"How to run Dify workflow on small server without rewriting harness\" - 69 characters, still too long.\n\"Run Dify workflow on small server without rewriting\" - 56 characters, which is under 60.\n\nNow I'll remove any special characters (there don't seem to be any) and convert to lowercase for the URL slug:\n\"run dify workflow on small server without rewriting\"\n\nThis is 50 characters, which is under the 60-character limit, and it clearly conveys the original meaning about running Dify workflows on small servers without rewriting the harness.\n\nLet me verify this meets all requirements:\n- Under 60 characters ✓\n- Clearly conveys the original meaning ✓\n- No special characters ✓\n- In lowercase suitable for URLs ✓\n\nThe final URL slug is: \"run-dify-workflow-on-small-server-without-rewriting\""
+      },
+      "meta": {
+        "provider": "zai",
+        "model": "glm-4.5-air",
+        "requested": "deepseek/deepseek-chat",
+        "routeSource": "profile-default",
+        "finish": "stop"
+      },
+      "kind": "llm",
+      "title": "LLM",
+      "durationMs": 3511
+    }
+  },
+  "usage": {
+    "inputTokens": 114,
+    "outputTokens": 347,
+    "totalTokens": 465
+  },
+  "agentsStarted": 1,
+  "events": [
+    {
+      "at": "start",
+      "label": "llm:LLM",
+      "phase": "dify:SEO Slug Generator",
+      "seq": 1
+    },
+    {
+      "at": "end",
+      "label": "llm:LLM",
+      "outcome": "completed",
+      "seq": 1
+    }
+  ],
+  "script": "phase(\"dify:SEO Slug Generator\")\nconst __nodes = {}\nconst __ran = {}\nconst __branch = {}\nlet __r0\n__ran[\"1721110595591\"] = true\nif ((__ran[\"1721110595591\"] === true)) {\n  const __in0 = {}\n  const __req0 = {\"kind\":\"llm\",\"nodeId\":\"1721110597868\",\"title\":\"LLM\",\"timeoutMs\":120000,\"inputs\":{},\"provider\":\"deepseek\",\"model\":\"deepseek-chat\",\"temperature\":1,\"prompt\":[{\"role\":\"system\",\"text\":\"\"},{\"role\":\"user\",\"text\":\"\"}]}\n  __req0.inputs = __in0\n  __req0.prompt[0].text = (\"This GPT will convert input titles or content into SEO-friendly English URL slugs. The slugs will clearly convey the original meaning while being concise and not exceeding 60 characters. If the input content is too long, the GPT will first condense it into an English phrase within 60 characters before generating the slug. If the title is too short, the GPT will prompt the user to input a longer title. Special characters in the input will be directly removed.\")\n  __req0.prompt[1].text = ((args[\"title\"] ?? ''))\n  const __raw0 = await agent(JSON.stringify(__req0), { label: \"llm:LLM\" })\n  if (__raw0 === null) throw new Error('dify node 1721110597868 (llm:LLM) failed: no result from provider')\n  __r0 = JSON.parse(__raw0)\n  if (!__r0.ok) throw new Error('dify node 1721110597868 (llm:LLM) failed: ' + (__r0.error ?? 'unknown error'))\n  __nodes[\"1721110597868\"] = __r0\n  __ran[\"1721110597868\"] = true\n}\nconst __outputs = {\"output\": (__r0?.outputs[\"text\"] === undefined ? null : __r0?.outputs[\"text\"])}\nreturn { nodes: __nodes, outputs: __outputs }",
+  "durationMs": 3736
+}

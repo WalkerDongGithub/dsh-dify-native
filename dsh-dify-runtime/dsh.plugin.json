@@ -1,0 +1,16 @@
+{
+  "id": "walker/dsh-dify-runtime",
+  "version": "0.1.0",
+  "main": "./lib/index.js",
+  "description": "Dify workflow DSL 导入 / 检查 / 确定性执行（最小验证版）。",
+  "engines": {
+    "dsh": ">=0.1.0-rc.6"
+  },
+  "contributes": {
+    "tools": [
+      "dify_inspect",
+      "dify_translate",
+      "dify_run"
+    ]
+  }
+}

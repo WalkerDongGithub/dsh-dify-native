@@ -1,0 +1,128 @@
+{
+  "ir_version": "1.0",
+  "source": {
+    "path": "/home/walker/dify-test/dsh-dify-runtime/../dsl/seo-slug.yml",
+    "difyVersion": "0.1.0",
+    "appName": "SEO Slug Generator",
+    "mode": "workflow"
+  },
+  "start": {
+    "id": "1721110595591",
+    "inputs": [
+      "title"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "1721110595591",
+      "type": "start",
+      "title": "Start",
+      "adapter": "start",
+      "status": "supported",
+      "data": {
+        "desc": "",
+        "selected": false,
+        "title": "Start",
+        "type": "start",
+        "variables": [
+          {
+            "label": "title",
+            "max_length": 200,
+            "options": [],
+            "required": true,
+            "type": "paragraph",
+            "variable": "title"
+          }
+        ]
+      }
+    },
+    {
+      "id": "1721110597868",
+      "type": "llm",
+      "title": "LLM",
+      "adapter": "llm",
+      "status": "supported",
+      "data": {
+        "context": {
+          "enabled": false,
+          "variable_selector": []
+        },
+        "desc": "",
+        "model": {
+          "completion_params": {
+            "temperature": 1
+          },
+          "mode": "chat",
+          "name": "deepseek-chat",
+          "provider": "deepseek"
+        },
+        "prompt_template": [
+          {
+            "id": "05b774ea-be9e-4220-adf5-6578df3fee19",
+            "role": "system",
+            "text": "This GPT will convert input titles or content into SEO-friendly English URL slugs. The slugs will clearly convey the original meaning while being concise and not exceeding 60 characters. If the input content is too long, the GPT will first condense it into an English phrase within 60 characters before generating the slug. If the title is too short, the GPT will prompt the user to input a longer title. Special characters in the input will be directly removed."
+          },
+          {
+            "id": "553e6337-9310-4400-8c2a-29fe6fec7c50",
+            "role": "user",
+            "text": "{{#1721110595591.title#}}"
+          }
+        ],
+        "selected": false,
+        "title": "LLM",
+        "type": "llm",
+        "variables": [],
+        "vision": {
+          "enabled": false
+        }
+      }
+    },
+    {
+      "id": "1721110634700",
+      "type": "end",
+      "title": "End",
+      "adapter": "end",
+      "status": "supported",
+      "data": {
+        "desc": "",
+        "outputs": [
+          {
+            "value_selector": [
+              "1721110597868",
+              "text"
+            ],
+            "variable": "output"
+          }
+        ],
+        "selected": false,
+        "title": "End",
+        "type": "end"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "1721110595591",
+      "target": "1721110597868",
+      "sourceHandle": "source",
+      "targetHandle": "target"
+    },
+    {
+      "source": "1721110597868",
+      "target": "1721110634700",
+      "sourceHandle": "source",
+      "targetHandle": "target"
+    }
+  ],
+  "executionOrder": [
+    "1721110595591",
+    "1721110597868",
+    "1721110634700"
+  ],
+  "variables": {
+    "environment": [],
+    "conversation": []
+  },
+  "unsupported": [],
+  "issues": []
+}

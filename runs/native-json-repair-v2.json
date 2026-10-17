@@ -1,0 +1,46 @@
+{
+  "status": "succeeded",
+  "stopReason": "completed",
+  "error": "",
+  "appName": "json-repair",
+  "outputs": {
+    "output": "{\"a\": 1, \"b\": [1, 2]}"
+  },
+  "nodes": {
+    "1732007419308": {
+      "ok": true,
+      "outputs": {
+        "result": "{\"a\": 1, \"b\": [1, 2]}"
+      },
+      "exitCode": 0,
+      "enforcement": "partial",
+      "backendArgv0": "/home/walker/node/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run",
+      "stderr": "landlock-run: partial enforcement (older Landlock ABI)\n",
+      "kind": "code",
+      "title": "代码执行",
+      "durationMs": 81
+    }
+  },
+  "usage": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "totalTokens": 0
+  },
+  "agentsStarted": 1,
+  "events": [
+    {
+      "at": "start",
+      "label": "code:代码执行",
+      "phase": "dify:json-repair",
+      "seq": 1
+    },
+    {
+      "at": "end",
+      "label": "code:代码执行",
+      "outcome": "completed",
+      "seq": 1
+    }
+  ],
+  "script": "phase(\"dify:json-repair\")\nconst __nodes = {}\nconst __ran = {}\nconst __branch = {}\nlet __r0\n__ran[\"1732007415808\"] = true\nif ((__ran[\"1732007415808\"] === true)) {\n  const __in0 = {\"llm_string\": args[\"llm_string\"]}\n  const __req0 = {\"kind\":\"code\",\"nodeId\":\"1732007419308\",\"title\":\"代码执行\",\"timeoutMs\":120000,\"inputs\":{},\"codeLanguage\":\"python3\",\"code\":\"import json_repair\\nimport json\\n\\ndef main(llm_string):\\n    new_string = json_repair.repair_json(llm_string, ensure_ascii=False)\\n    return {\\n        \\\"result\\\": new_string\\n    }\\n\"}\n  __req0.inputs = __in0\n  const __raw0 = await agent(JSON.stringify(__req0), { label: \"code:代码执行\" })\n  if (__raw0 === null) throw new Error('dify node 1732007419308 (code:代码执行) failed: no result from provider')\n  __r0 = JSON.parse(__raw0)\n  if (!__r0.ok) throw new Error('dify node 1732007419308 (code:代码执行) failed: ' + (__r0.error ?? 'unknown error'))\n  __nodes[\"1732007419308\"] = __r0\n  __ran[\"1732007419308\"] = true\n}\nconst __outputs = {\"output\": (__r0?.outputs[\"result\"] === undefined ? null : __r0?.outputs[\"result\"])}\nreturn { nodes: __nodes, outputs: __outputs }",
+  "durationMs": 396
+}
