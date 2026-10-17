@@ -293,3 +293,137 @@ def _extract_text_from_properties(file_content: bytes) -> str:
         return "\n".join(result)
     except Exception as e:
         raise TextExtractionError(f"Failed to extract text from properties file: {str(e)}") from e
+
+UnsupportedFileTypeError = ValueError
+
+def _extract_text_by_mime_type(*, file_content: bytes, mime_type: str) -> str:
+    """Extract text from a file based on its MIME type."""
+    match mime_type:
+        case "text/plain" | "text/html" | "text/htm" | "text/markdown" | "text/xml":
+            return _extract_text_from_plain_text(file_content)
+        case "application/pdf":
+            return _extract_text_from_pdf(file_content)
+        case "application/msword":
+            return _extract_text_from_doc(file_content)
+        case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            return _extract_text_from_docx(file_content)
+        case "text/csv":
+            return _extract_text_from_csv(file_content)
+        case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" | "application/vnd.ms-excel":
+            return _extract_text_from_excel(file_content)
+        case "application/vnd.ms-powerpoint":
+            return _extract_text_from_ppt(file_content)
+        case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+            return _extract_text_from_pptx(file_content)
+        case "application/epub+zip":
+            return _extract_text_from_epub(file_content)
+        case "message/rfc822":
+            return _extract_text_from_eml(file_content)
+        case "application/vnd.ms-outlook":
+            return _extract_text_from_msg(file_content)
+        case "application/json":
+            return _extract_text_from_json(file_content)
+        case "application/x-yaml" | "text/yaml":
+            return _extract_text_from_yaml(file_content)
+        case "text/vtt":
+            return _extract_text_from_vtt(file_content)
+        case "text/properties":
+            return _extract_text_from_properties(file_content)
+        case _:
+            raise UnsupportedFileTypeError(f"Unsupported MIME type: {mime_type}")
+
+def _extract_text_by_file_extension(*, file_content: bytes, file_extension: str) -> str:
+    """Extract text from a file based on its file extension."""
+    match file_extension:
+        case (
+            ".txt"
+            | ".markdown"
+            | ".md"
+            | ".html"
+            | ".htm"
+            | ".xml"
+            | ".c"
+            | ".h"
+            | ".cpp"
+            | ".hpp"
+            | ".cc"
+            | ".cxx"
+            | ".c++"
+            | ".py"
+            | ".js"
+            | ".ts"
+            | ".jsx"
+            | ".tsx"
+            | ".java"
+            | ".php"
+            | ".rb"
+            | ".go"
+            | ".rs"
+            | ".swift"
+            | ".kt"
+            | ".scala"
+            | ".sh"
+            | ".bash"
+            | ".bat"
+            | ".ps1"
+            | ".sql"
+            | ".r"
+            | ".m"
+            | ".pl"
+            | ".lua"
+            | ".vim"
+            | ".asm"
+            | ".s"
+            | ".css"
+            | ".scss"
+            | ".less"
+            | ".sass"
+            | ".ini"
+            | ".cfg"
+            | ".conf"
+            | ".toml"
+            | ".env"
+            | ".log"
+            | ".vtt"
+        ):
+            return _extract_text_from_plain_text(file_content)
+        case ".json":
+            return _extract_text_from_json(file_content)
+        case ".yaml" | ".yml":
+            return _extract_text_from_yaml(file_content)
+        case ".pdf":
+            return _extract_text_from_pdf(file_content)
+        case ".doc":
+            return _extract_text_from_doc(file_content)
+        case ".docx":
+            return _extract_text_from_docx(file_content)
+        case ".csv":
+            return _extract_text_from_csv(file_content)
+        case ".xls" | ".xlsx":
+            return _extract_text_from_excel(file_content)
+        case ".ppt":
+            return _extract_text_from_ppt(file_content)
+        case ".pptx":
+            return _extract_text_from_pptx(file_content)
+        case ".epub":
+            return _extract_text_from_epub(file_content)
+        case ".eml":
+            return _extract_text_from_eml(file_content)
+        case ".msg":
+            return _extract_text_from_msg(file_content)
+        case ".properties":
+            return _extract_text_from_properties(file_content)
+        case _:
+            raise UnsupportedFileTypeError(f"Unsupported Extension Type: {file_extension}")
+
+def _needs_conversion(kind):
+    def fail(file_content):
+        raise ValueError(f'{kind} requires an explicit conversion service / unstructured chain; not installed by requirements-extraction.txt (remaining S)')
+    return fail
+
+_extract_text_from_doc = _needs_conversion('DOC')
+_extract_text_from_ppt = _needs_conversion('PPT')
+_extract_text_from_pptx = _needs_conversion('PPTX')
+_extract_text_from_epub = _needs_conversion('EPUB')
+_extract_text_from_eml = _needs_conversion('EML')
+_extract_text_from_msg = _needs_conversion('MSG')

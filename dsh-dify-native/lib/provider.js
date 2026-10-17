@@ -1647,22 +1647,23 @@ async function executeDocumentExtractor(ctx, spec, request, env) {
       const remote = item?.remote_url ?? item?.url
       let bytes
       let extension = item?.extension
+      let mimeType = item?.mime_type
       if (typeof remote === 'string' && /^https?:/i.test(remote)) {
         const response = await fetch(remote, { signal: request.signal })
         if (!response.ok) throw new Error(`HTTP ${response.status} downloading ${remote}`)
         bytes = Buffer.from(await response.arrayBuffer())
-        extension ||= extname(new URL(remote).pathname)
-        if (!extension) extension = ({ 'application/pdf': '.pdf', 'text/plain': '.txt', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx' })[item?.mime_type ?? response.headers.get('content-type')?.split(';')[0]]
+        if (extension === undefined) extension = extname(new URL(remote).pathname)
+        mimeType ??= response.headers.get('content-type')?.split(';')[0]
       } else {
         const value = typeof item === 'string' ? item : item?.file_path ?? item?.path ?? item?.local_path
         const path = resolveDocumentPath(value, workspaceRoot, env)
         if (!path) throw new Error(`file path missing or outside workspace: ${stringify(value)}`)
         bytes = readFileSync(path)
-        extension ||= extname(path)
+        if (extension === undefined) extension = extname(path)
       }
       const proc = await runChild([env.python, join(dirname(fileURLToPath(import.meta.url)), 'extract-document.py')], {
         cwd: workspaceRoot, env: { ...process.env, ...({ PYTHONPATH: [process.env.DIFY_EXTRACTION_VENDOR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '.vendor-extraction'), env.pythonPath, process.env.PYTHONPATH].filter(Boolean).join(':') }) },
-        input: JSON.stringify({ bytes: bytes.toString('base64'), extension: extension ?? '' }), timeoutMs: 120_000, signal: request.signal,
+        input: JSON.stringify({ bytes: bytes.toString('base64'), extension: extension ?? '', mime_type: mimeType ?? '' }), timeoutMs: 120_000, signal: request.signal,
       })
       if (proc.code !== 0 || proc.aborted || proc.timedOut || proc.spawnError) throw new Error(`extraction process failed (output limit 4 MiB, timeout 120s): ${proc.spawnError ?? proc.stderr ?? proc.code}`)
       const result = JSON.parse(proc.stdout)

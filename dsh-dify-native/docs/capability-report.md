@@ -100,7 +100,7 @@ DIFY_E2E_EVIDENCE=/tmp/dify-e2e-evidence.json node tests/engine-e2e.test.mjs
 
 ## Extraction 修正与验证（2026-10-18）
 
-02d4101 最初的 stdlib OOXML 方案有实际语义偏差，已撤换。现在复用固定 cd47a47 的 `document_extractor/node.py` 纯提取函数，PDF 使用官方精确版本 pypdfium2==4.30.0，DOCX 使用 python-docx，Excel 使用 pandas/openpyxl，包括公式缓存读取，不自行计算公式。DOCX 表头 `---`、单元格 `<br>`、JSON/YAML/CSV/properties 转换均按官方函数；VTT 使用官方 `_extract_text_from_vtt`（固定版扩展名路由把 .vtt 当纯文本，本地明确选择转换函数）。PDF/合法 DOCX/多 sheet XLSX/CSV/JSON/YAML/VTT/properties 由 AST 加载固定官方源码计算预期值，真实 workflowEngine.start 输出逐字相等。原数组、长文本、远程 PDF、404/文件/二进制失败断言保留。旧测试仅将非法 ZIP fixture 改为成熟库生成合法文件，未改断言。
+02d4101 最初的 stdlib OOXML 方案有实际语义偏差，已撤换。现在复用固定 cd47a47 的 `document_extractor/node.py` 纯提取函数，PDF 使用官方精确版本 pypdfium2==4.30.0，DOCX 使用 python-docx，Excel 使用 pandas/openpyxl，包括公式缓存读取，不自行计算公式。DOCX 表头 `---`、单元格 `<br>`、JSON/YAML/CSV/properties 转换均按官方函数；完整复用固定官方扩展名/MIME 路由：扩展名优先；`.vtt` 保持原文，只有无扩展且 MIME=text/vtt 才走转换。PDF/合法 DOCX/多 sheet XLSX/CSV/JSON/YAML/VTT/properties 由 AST 同时加载固定官方路由及纯提取函数计算预期值，真实 workflowEngine.start 输出逐字相等。原数组、长文本、远程 PDF、404/文件/二进制失败断言保留。旧测试仅将非法 ZIP fixture 改为成熟库生成合法文件，未改断言。
 
 部署：运行 `./scripts/install-extraction.sh`；依赖装入插件新目录 `.vendor-extraction`，已存在即拒绝覆盖。指定 `DIFY_RUNTIME_PYTHON` 选择 Python，`DIFY_EXTRACTION_VENDOR` 选择新目录，或用 `DIFY_PYTHONPATH` 指向已配依赖。`requirements-extraction.txt` 固定依赖，运行时不隐式安装。缺库明确报安装方法。没有安装 unstructured。旧 DOC/PPT/PPTX/EPUB/EML/MSG 完整官方转换链仍为 S 子项；XLS 还需 xlrd 等按格式配置，未验证。OCR 不承诺。每文件输出上限仍为 4 MiB 子进程传输限制，超限明确失败，不静默截断。
 
@@ -117,3 +117,5 @@ conversation 回归先真实失败（第二次仍为1），修复后 engine-conv
 #7 trigger-schedule 基础调度已修：croniter 五字段 cron/IANA 时区、真实槽时间、持久位置、去重/重启补偿；engine-schedule.test.mjs 真实引擎通过。visual_config 四种频率及 last 已追加真实引擎验证；未证明的 Dify 原生调度服务生命周期保持 S 子项，不把分布式 exactly-once 虚构成官方要求。
 
 #8 human 基础等待已修，见 [human-wait.md](human-wait.md)。新增真实回归还发现普通 HTTP 成功后下游被错误分支 guard 跳过，先复现 outputs=null，再修到真实响应进入下游（engine-http-follow.test.mjs）。只有 fail-branch 配置才按 HTTP handle 选边；旧断言未变。
+
+路由补正：engine-extraction-routing.test.mjs 先复现 .vtt 被误转换，再逐字验证官方全部49个纯文本扩展、8个仅MIME本地格式、远程URL无扩展的text/vtt，以及显式扩展优先和数组任一失败。完整官方路由已复用，不再自行维护缩减扩展名或 MIME 猜测表。

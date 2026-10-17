@@ -468,3 +468,5 @@ TLS 4651731 已复核；start.config 在固定版本不存在，不凭空实现�
 #7 基础项已修：cron/时区/真实槽时间/持久补偿去重；engine-schedule.test.mjs 先失败缺调度入口，修后真实引擎通过。visual_config 四种频率及 last 已补，固定新版纯函数复用且真实引擎通过；原生服务生命周期未验证仍 S。
 
 #8 顶层真实等待/持久 checkpoint/提交/超时恢复已修；取消默认首选动作，保留显式注入。engine-human-wait.test.mjs 验证重开后恢复且上游 HTTP 不重放，等待时误新 run 明确拒绝；engine-human-form.test.mjs 验证动态内容/默认变量。容器内暂停、高级表单、自动过期通知及原生生命周期仍 S 子项。另修普通 HTTP 错误 guard 跳过下游：真实失败回归 engine-http-follow.test.mjs 已通过。
+
+#1 路由审查纠正：之前直接调用 VTT 纯函数的差分没有覆盖真实节点分派；现参考 AST 同时加载官方路由。`.vtt` 原文/无扩展 MIME=text/vtt 转换、49种官方纯文本扩展、8种本地 MIME、远程 MIME、混合失败均真实引擎通过。旧的直接选择转换不再是当前行为。
