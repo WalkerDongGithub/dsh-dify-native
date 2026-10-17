@@ -26,7 +26,8 @@ for test in \
   tests/engine-extraction.test.mjs \
   tests/engine-extraction-differential.test.mjs \
   tests/engine-datasource.test.mjs \
-  tests/engine-agent-loop.test.mjs
+  tests/engine-agent-loop.test.mjs \
+  tests/engine-conversation.test.mjs
 do
   echo "== $test"
   node "$test"

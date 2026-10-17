@@ -1084,6 +1084,7 @@ export function compileGraph(parsed, options = {}) {
     (parsed.environmentVariables ?? []).filter((v) => v?.name).map((v) => [String(v.name), v.value ?? '']),
   )
   lines.push(`const __vars = ${JSON.stringify({ conversation, environment })}`)
+  lines.push(`Object.assign(__vars.conversation, args['__dify_conversation'] ?? {})`)
   // Dify system variables. `conversation_id` / `dialogue_count` are injected by
   // the run as `args['sys.*']` from the calling harness session (see
   // `systemVariables` in index.js); when absent they stay undefined, which the
@@ -1898,7 +1899,7 @@ export function compileGraph(parsed, options = {}) {
   lines.push(`const __outputs = {${entries.join(', ')}}`)
   lines.push(`const __answer = __answers.length > 0 ? __answers.join('\\n\\n') : ''`)
   lines.push(`if (__answers.length > 0 && __outputs.answer === undefined) __outputs.answer = __answer`)
-  lines.push('return { nodes: __nodes, outputs: __outputs, answers: __answers }')
+  lines.push('return { nodes: __nodes, outputs: __outputs, answers: __answers, conversation: __vars.conversation }')
 
   return {
     script: lines.join('\n'),

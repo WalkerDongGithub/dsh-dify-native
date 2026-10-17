@@ -14,7 +14,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync, mkdtempSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { stateRoot, stateKey, readState, writeState, lockState } from './runtime-state.js'
 import { fileURLToPath } from 'node:url'
 import { compileGraph, inspectGraph, parseDifyDsl } from './dsl.js'
 import { createDifyNodeProvider, defaultPythonPath } from './provider.js'
@@ -385,15 +386,19 @@ function createRunTool(ctx) {
       const offEnd = ctx.on('workflow/agent-end', (_info, agent) =>
         events.push({ at: 'end', label: agent.label, outcome: agent.outcome, seq: agent.seq }),
       )
-      let run
+      let run, release
+      const root = stateRoot(cwd)
+      const conversationKey = parent.session?.id && parent.session.id !== 'dify-native-offline' ? stateKey(`conversation:${parent.session.id}:${resolve(args.path)}`) : undefined
       try {
+        if (conversationKey) release = await lockState(root, conversationKey)
+        const saved = conversationKey ? await readState(root, conversationKey) : undefined
         run = engine.start({
           meta: compiled.meta,
           script,
           // `sys.*` mirrors Dify's system variables. The conversation identity
           // comes from the live harness session: `sys.conversation_id` is its id,
           // and `sys.dialogue_count` is the number of real user turns so far.
-          args: { ...inputs, ...systemVariables(parent.session) },
+          args: { ...inputs, ...systemVariables(parent.session), __dify_conversation: saved?.conversation ?? {} },
           parent,
           subagentProvider: 'dify-node',
         })
@@ -409,6 +414,7 @@ function createRunTool(ctx) {
           if (extra.warnings !== undefined) node.warnings = extra.warnings
         }
         const ok = result.stopReason === 'completed'
+        if (ok && conversationKey) await writeState(root, conversationKey, { conversation: value.conversation ?? {}, updatedAt: new Date().toISOString() })
         const record = {
           status: ok ? 'succeeded' : 'failed',
           stopReason: result.stopReason,
@@ -461,6 +467,7 @@ function createRunTool(ctx) {
         await persistTrace(args.tracePath, failed)
         return failed
       } finally {
+        await release?.()
         offStart?.()
         offEnd?.()
         if (run !== undefined) {

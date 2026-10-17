@@ -39,7 +39,7 @@
 | translation.yml | 跑通 | country 为空 / Canada 均执行；检查实际分支及未执行分支；建议传入最后一次模型请求，最终 outputs 分别为对应标记 |
 | nodes-parameter-extractor.yml | 跑通 | 真实 provider 解析固定模型 JSON，最终 name=张三、city=北京、success=1 |
 
-form-demo 的聊天分支使用解析后 DSL 中预置的 conversation 默认值，其他节点/边不变，仍由真实引擎运行。**当前 runner 每次重新初始化 conversation 默认值，没有证明跨 run 保持登录状态。** 原样本两次登录测试与这次预置状态测试分开计数。
+form-demo 的聊天分支使用解析后 DSL 中预置的 conversation 默认值，其他节点/边不变，仍由真实引擎运行。历史运行使用预置状态；现在另有跨 run 回归：同会话同工作流持久变量从 1 递增到 2，其他会话独立从 1 开始。 原样本两次登录测试与这次预置状态测试分开计数。
 
 ## 节点支持级别
 
@@ -94,7 +94,7 @@ DIFY_E2E_EVIDENCE=/tmp/dify-e2e-evidence.json node tests/engine-e2e.test.mjs
 
 - datasource 的真实 Dify 插件、认证云账户和远端文件生命周期仍为 S 子项；已证明 sys 本地文件/网站信息与声明式 HTTP 适配，见 [部署协议](datasource-contract.md)。
 - `http-request.ssl_verify` 已在 4651731 修复并真实验证；`start.config` 固定官方版本无此字段，不赋予猜测语义。
-- 表单 conversation 变量跨 run 持久化，以及公网 Jina 部署仍需处理。
+- conversation 已补同会话/工作流本地持久化与会话隔离；失败运行不提交状态（与官方逐节点持久化的完整等价仍需验证）。公网 Jina 部署仍需处理。
 - file 输入的“multiple values for keyword argument”未复现；新增测试证明 dict 原样传入，未宣称修复该未复现错误。
 - RAG 扩展按用户要求暂停。尚未合并 main 或推送远端。
 
@@ -109,3 +109,5 @@ TLS 4651731 已复核且真实引擎测试通过：false 单请求 curl --insecu
 #4 datasource / datasource-empty 基础项修复：真实引擎先复现 sys 被忽略而把 datasource_name 当文件路径，再通过 file/website/remote-contract/拒绝猜路径断言。另先复现损坏 JSONL 被吞错，再修复到节点失败。`tests/engine-datasource.test.mjs`，旧断言保留。
 
 #5 agent 基础项已修：`tests/engine-agent-loop.test.mjs` 先复现工具 JSON 被当最终文本，再真实引擎验证一次 HTTP 工具与回灌、未声明/schema/duplicate/limit/cancel；旧单轮断言未改。完整协议及 S 子项见 [agent-strategy.md](agent-strategy.md)。
+
+conversation 回归先真实失败（第二次仍为1），修复后 engine-conversation.test.mjs 通过。状态键为 session.id + 工作流绝对路径，默认工作区 `.dify-native-state` 或 DIFY_STATE_DIR；写临时文件 fsync 后原子 rename，锁冲突明确失败，绝不自动清理旧锁或重放。成功运行提交变量，失败不提交；未验证失败节点前已写变量与官方事务边界等价，仍为 S 子项。
