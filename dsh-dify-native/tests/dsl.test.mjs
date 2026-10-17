@@ -203,8 +203,10 @@ workflow:
   assert.deepEqual(inspection.unsupported, [])
   const compiled = compileGraph(parsed)
   assert.match(compiled.script, /"kind":"question-classifier"/)
-  assert.match(compiled.script, /__branch\["1718246909580"\] = String\(__r1\.outputs\.class_id\)/)
+  assert.match(compiled.script, /__branch\["1718246909580"\] = String\(__r1\.outputs\.class_id \?\? ''\)/)
+  // An id edge matches class_id; a no-id class reports '' and matches by name.
   assert.match(compiled.script, /__branch\["1718246909580"\] === "1715846546749"/)
+  assert.match(compiled.script, /__branchName\["1718246909580"\] = String\(__r1\.outputs\.class_name \?\? ''\)/)
   assert.match(compiled.script, /"kind":"knowledge-retrieval"/)
   assert.match(compiled.script, /__text\(__r0\?\.outputs\["text"\]\)/)
   assert.match(compiled.script, /__text\(__r3\?\.outputs\["result"\]\)/)

@@ -600,7 +600,16 @@ function allowedHandles(node) {
   const kind = node.kind
   const data = node.data ?? {}
   if (kind === 'if-else') return new Set([...new Set((data.cases ?? []).map((c) => String(c.case_id ?? ''))), 'false'])
-  if (kind === 'question-classifier') return new Set((data.classes ?? []).map((c) => String(c.id ?? c.name ?? '')))
+  // Either handle form an export may use: the class id, and the class name when
+  // `classes[].id` is absent (older exports) or an edge was drawn by name.
+  if (kind === 'question-classifier') {
+    const handles = new Set()
+    for (const c of data.classes ?? []) {
+      if (c.id !== undefined && c.id !== null) handles.add(String(c.id))
+      handles.add(String(c.name ?? ''))
+    }
+    return handles
+  }
   if (kind === 'http-request') {
     return String(data.error_strategy ?? 'none') === 'fail-branch' ? new Set(['success-branch', 'fail-branch']) : new Set(['source'])
   }
@@ -835,7 +844,7 @@ export function inspectIR(ir) {
       issues.push(`edge ${edge.id} leaves ${edge.source} (${source.kind}) on handle "${edge.handle}"; allowed: ${[...allowed].join(', ') || '(none)'}`)
     }
     if (source.kind === 'question-classifier') {
-      const ids = (source.data.classes ?? []).map((c) => String(c.id ?? c.name ?? ''))
+      const ids = (source.data.classes ?? []).filter((c) => c.id !== undefined && c.id !== null).map((c) => String(c.id))
       if (new Set(ids).size !== ids.length) issues.push(`question-classifier ${edge.source} has duplicate class ids`)
     }
   }
@@ -1025,6 +1034,7 @@ export function compileGraph(parsed, options = {}) {
   lines.push('const __nodes = {}')
   lines.push('const __ran = {}')
   lines.push('const __branch = {}')
+  lines.push('const __branchName = {}')
   lines.push('const __answers = []')
   // Dify's `{{#context#}}` may hold retrieval segments; render them as text
   // rather than JavaScript's default `[object Object]`.
@@ -1104,6 +1114,7 @@ export function compileGraph(parsed, options = {}) {
     locals: new Map(),
     ran: '__ran',
     branch: '__branch',
+    branchName: '__branchName',
     nodes: '__nodes',
     indent: 0,
   }
@@ -1120,6 +1131,14 @@ export function compileGraph(parsed, options = {}) {
       .map(({ source, handle }) => {
         const sourceNode = ir.byId.get(source)
         const kind = sourceNode?.kind ?? 'generic'
+        if (kind === 'question-classifier') {
+          // Edges may name a class either way: by `id`, or by `name` when the
+          // export has no `id`. A class without an id reports class_id ''; the
+          // edge then matches its name. When an id exists it stays authoritative.
+          const branchVar = `${scope.branch}[${JSON.stringify(source)}]`
+          const nameVar = `${scope.branchName}[${JSON.stringify(source)}]`
+          return `(${scope.ran}[${JSON.stringify(source)}] === true && (${branchVar} === ${JSON.stringify(handle)} || (${branchVar} === '' && ${nameVar} === ${JSON.stringify(handle)})))`
+        }
         if (BRANCH_KINDS.has(kind)) {
           return `(${scope.ran}[${JSON.stringify(source)}] === true && ${scope.branch}[${JSON.stringify(source)}] === ${JSON.stringify(handle)})`
         }
@@ -1200,8 +1219,11 @@ export function compileGraph(parsed, options = {}) {
     } else if (kind === 'question-classifier') {
       const model = data.model ?? {}
       const params = model.completion_params ?? {}
+      // `classes[].id` is optional in Dify exports; it is kept as-is (absent
+      // stays absent) so class_id never silently becomes the class name. Edge
+      // matching in the compiled script accepts either form.
       spec.classes = (data.classes ?? []).map((item) => ({
-        id: String(item.id ?? item.name ?? ''),
+        ...(item.id !== undefined && item.id !== null ? { id: String(item.id) } : {}),
         name: String(item.name ?? ''),
       }))
       spec.instruction = String(data.instruction ?? '')
@@ -1389,7 +1411,12 @@ export function compileGraph(parsed, options = {}) {
     lines.push(`${pad}  if (!${variable}.ok) throw new Error('dify node ${node.id} (${label}) failed: ' + (${variable}.error ?? 'unknown error'))`)
     lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
     if (kind === 'if-else') lines.push(`${pad}  ${scope.branch}[${JSON.stringify(node.id)}] = String(${variable}.outputs.result)`)
-    if (kind === 'question-classifier') lines.push(`${pad}  ${scope.branch}[${JSON.stringify(node.id)}] = String(${variable}.outputs.class_id)`)
+    if (kind === 'question-classifier') {
+      // The provider reports class_id (absent / '' when the DSL has no id) and
+      // class_name; each outgoing edge matches whichever of the two it names.
+      lines.push(`${pad}  ${scope.branch}[${JSON.stringify(node.id)}] = String(${variable}.outputs.class_id ?? '')`)
+      lines.push(`${pad}  ${scope.branchName}[${JSON.stringify(node.id)}] = String(${variable}.outputs.class_name ?? '')`)
+    }
     if (kind === 'http-request' && String(data.error_strategy ?? 'none') === 'fail-branch') {
       lines.push(`${pad}  ${scope.branch}[${JSON.stringify(node.id)}] = String(${variable}.branch ?? 'success-branch')`)
     }
@@ -1666,6 +1693,7 @@ export function compileGraph(parsed, options = {}) {
       locals: new Map(scope.locals),
       ran: ranVar,
       branch: branchVar,
+      branchName: `__branchNameIt${index}`,
       nodes: '__nodes',
       indent: level + 2,
     }
@@ -1748,6 +1776,7 @@ export function compileGraph(parsed, options = {}) {
     lines.push(`${pad}  const ${outVar} = []`)
     lines.push(`${pad}  const ${ranVar} = {}`)
     lines.push(`${pad}  const ${branchVar} = {}`)
+    lines.push(`${pad}  const __branchNameIt${index} = {}`)
 
     // Body result variables MUST be declared per item. The script runs in a
     // vm realm that is not strict mode, so an undeclared assignment would land

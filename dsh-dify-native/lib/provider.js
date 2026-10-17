@@ -640,9 +640,12 @@ async function enforceStructuredOutput(ctx, request, route, spec, initial) {
  * The model never picks an edge; an unknown or ambiguous answer fails closed.
  */
 async function executeClassifier(ctx, spec, request, env) {
+  // `id` is optional in Dify exports: keep it missing instead of substituting the
+  // name (or the index). class_id is then '', and the compiled script routes on
+  // class_name — the value the DSL's edges were actually drawn with.
   const classes = (Array.isArray(spec.classes) ? spec.classes : [])
-    .map((item, index) => ({
-      id: String(item?.id ?? item?.name ?? index),
+    .map((item) => ({
+      id: item?.id !== undefined && item?.id !== null ? String(item.id) : '',
       name: String(item?.name ?? ''),
     }))
     .filter((item) => item.name.length > 0)
@@ -686,7 +689,9 @@ async function executeClassifier(ctx, spec, request, env) {
   let matches = []
   for (const candidate of candidates) {
     const exact = classes.filter(
-      (item) => item.name.toLowerCase() === candidate.toLowerCase() || item.id.toLowerCase() === candidate.toLowerCase(),
+      (item) =>
+        item.name.toLowerCase() === candidate.toLowerCase() ||
+        (item.id.length > 0 && item.id.toLowerCase() === candidate.toLowerCase()),
     )
     if (exact.length > 0) {
       matches = exact

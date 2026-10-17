@@ -6,7 +6,7 @@
  *   node tests/nodes.test.mjs
  */
 import assert from 'node:assert/strict'
-import { compileGraph, parseDifyDsl } from '../lib/dsl.js'
+import { compileGraph, inspectGraph, parseDifyDsl } from '../lib/dsl.js'
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 
@@ -22,6 +22,8 @@ async function run(yml, inputs, handler) {
   const value = await fn(agent, () => {}, inputs)
   return { value, calls, compiled }
 }
+
+const compiledIssues = (yml) => inspectGraph(parseDifyDsl(yml)).issues
 
 const start = (extra = '') => `
 app: { name: test, mode: ${extra.includes('advanced-chat') ? 'advanced-chat' : 'workflow'} }
@@ -253,6 +255,46 @@ ${extra}
   assert.equal(value.outputs.out, 'done')
   assert.equal(calls.length, 3)
   console.log('ok 5 — tool → knowledge → context LLM dataflow and segment rendering')
+}
+
+// 6. question-classifier whose classes carry only `name` (no `id`, the common
+//    older export): class_id stays absent from the spec, and the answer still
+//    routes to the edge drawn with the class name.
+{
+  const yml = start(`
+      - id: c
+        type: custom
+        data:
+          type: question-classifier
+          title: classify
+          query_variable_selector: [s, q]
+          classes: [{ name: "健康咨询" }, { name: "使用帮助" }]
+          model: { provider: deepseek, name: deepseek-chat }
+      - { id: h, type: custom, data: { type: template-transform, title: health, template: "HEALTH", variables: [] } }
+      - { id: u, type: custom, data: { type: template-transform, title: help, template: "HELP", variables: [] } }
+      - id: agg
+        type: custom
+        data: { type: variable-aggregator, title: join, variables: [[h, output], [u, output]] }
+      - { id: e, type: custom, data: { type: end, outputs: [{ variable: out, value_selector: [agg, output] }] } }
+    edges:
+      - { source: s, target: c, sourceHandle: source }
+      - { source: c, target: h, sourceHandle: "健康咨询" }
+      - { source: c, target: u, sourceHandle: "使用帮助" }
+      - { source: h, target: agg, sourceHandle: source }
+      - { source: u, target: agg, sourceHandle: source }
+      - { source: u, target: agg, sourceHandle: source }
+      - { source: agg, target: e, sourceHandle: source }
+`)
+  assert.deepEqual(compiledIssues(yml), [], 'name handles are legal classifier edges')
+  // The real provider's shape when the DSL has no class ids.
+  const { value } = await run(yml, { q: '怎么配对腕带' }, (spec) => {
+    assert.equal(spec.kind, 'question-classifier')
+    assert.deepEqual(spec.classes, [{ name: '健康咨询' }, { name: '使用帮助' }], 'no id is invented from the name')
+    return { ok: true, outputs: { class_id: '', class_name: '使用帮助', raw: '使用帮助' } }
+  })
+  assert.equal(value.outputs.out, 'HELP')
+  assert.ok(!('h' in value.nodes))
+  console.log('ok 6 — classifier ids stay absent; name-only classes still route to their edge')
 }
 
 console.log('NODE TESTS OK')

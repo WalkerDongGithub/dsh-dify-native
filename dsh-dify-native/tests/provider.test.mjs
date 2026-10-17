@@ -307,5 +307,17 @@ const classifierSpec = (text) => ({
   console.log('ok 4 — knowledge-retrieval ranks local corpus lines, honors top_k, fails on missing dataset')
 }
 
+// 5. classes without `id`: class_id is not the class name, it stays ''.
+{
+  const withoutId = await runSpec(makeCtx({ llmText: '使用帮助' }), {
+    ...classifierSpec('怎么配对'),
+    classes: [{ name: '健康咨询' }, { name: '使用帮助' }],
+  })
+  assert.equal(withoutId.ok, true, withoutId.error)
+  assert.equal(withoutId.outputs.class_name, '使用帮助')
+  assert.equal(withoutId.outputs.class_id, '', 'missing id is not substituted with the name')
+  console.log('ok 5 — classifier without class ids reports an empty class_id, never the name')
+}
+
 rmSync(TMP, { recursive: true, force: true })
 console.log('PROVIDER TESTS OK')
