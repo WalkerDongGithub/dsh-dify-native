@@ -96,8 +96,10 @@ async function run(inputs) {
 
 console.log('TRANSLATION SCRIPT TESTS OK')
 
-// Template-transform compiles to plain JS (no agent call) and renders both
-// `{{ name }}` bindings and `{{#node.var#}}` references.
+// A selector-only template-transform still compiles to plain JS with NO agent
+// call: the fast path is unchanged. A template containing Jinja2 goes through
+// the provider instead (nunjucks lives on the JS side) — see
+// tests/template-jinja.test.mjs.
 {
   const yml = `
 app: { name: template-check, mode: workflow }
@@ -110,7 +112,7 @@ workflow:
         data:
           type: template-transform
           title: greet
-          template: "Hello {{ name }} / {{#s.x#}}"
+          template: "Hello {{#s.x#}}"
           variables: [{ variable: name, value_selector: [s, x] }]
       - { id: e, type: custom, data: { type: end, outputs: [{ variable: out, value_selector: [t, output] }] } }
     edges:
@@ -120,10 +122,48 @@ workflow:
   const compiledTemplate = compileGraph(parseDifyDsl(yml))
   const fn = new AsyncFunction('agent', 'phase', 'args', compiledTemplate.script)
   const value = await fn(async () => {
-    throw new Error('template-transform must not call agent()')
+    throw new Error('a selector-only template-transform must not call agent()')
   }, () => {}, { x: 'world' })
-  assert.equal(value.outputs.out, 'Hello world / world')
-  console.log('ok 4 — template-transform renders in-script without an agent call')
+  assert.equal(value.outputs.out, 'Hello world')
+  console.log('ok 4 — selector-only template-transform renders in-script without an agent call')
+}
+
+// A Jinja2 template renders through the provider call.
+{
+  const yml = `
+app: { name: syntax-check, mode: workflow }
+workflow:
+  graph:
+    nodes:
+      - { id: s, type: custom, data: { type: start, variables: [{ variable: items }] } }
+      - id: t
+        type: custom
+        data:
+          type: template-transform
+          title: list
+          template: "{% for x in items %}- {{ x }}\\n{% endfor %}"
+          variables: [{ variable: items, value_selector: [s, items] }]
+      - { id: e, type: custom, data: { type: end, outputs: [{ variable: out, value_selector: [t, output] }] } }
+    edges:
+      - { source: s, target: t, sourceHandle: source }
+      - { source: t, target: e, sourceHandle: source }
+`
+  const compiledTemplate = compileGraph(parseDifyDsl(yml))
+  const { renderJinja } = await import('../lib/jinja.js')
+  let calls = 0
+  const value = await new AsyncFunction('agent', 'phase', 'args', compiledTemplate.script)(
+    async (prompt) => {
+      calls += 1
+      const request = JSON.parse(prompt)
+      const rendered = renderJinja(request.template, request.context)
+      return JSON.stringify(rendered.ok ? { ok: true, outputs: { output: rendered.text } } : { ok: false, error: rendered.error })
+    },
+    () => {},
+    { items: ['a', 'b'] },
+  )
+  assert.equal(calls, 1, 'a Jinja template makes exactly one provider call')
+  assert.equal(value.outputs.out, '- a\n- b\n')
+  console.log('ok 5 — Jinja template-transform renders through the provider')
 }
 
 console.log('TRANSLATION SCRIPT TESTS OK (extended)')

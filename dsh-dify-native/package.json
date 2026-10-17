@@ -24,5 +24,8 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "dependencies": {
+    "nunjucks": "^3.2.4"
   }
 }

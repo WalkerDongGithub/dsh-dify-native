@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compileGraph, inspectGraph, parseDifyDsl } from './dsl.js'
 import { createDifyNodeProvider, defaultPythonPath } from './provider.js'
+import { deriveChatHistory } from './session-history.js'
 
 const name = 'dsh-dify-native'
 const inject = ['tools']
@@ -61,6 +62,54 @@ async function loadAndCompile(path, options = {}) {
   return { parsed, inspection, compiled }
 }
 
+/**
+ * Dify system variables derived from the calling harness session.
+ *
+ * The DSL compiles `{{#sys.conversation_id#}}` etc. into reads from `args`, so
+ * the run injects them next to the start-node inputs. When a run has no live
+ * session (an offline one-shot call) these stay undefined, which the compiled
+ * script already handles (`__vars.sys` falls back to its own defaults).
+ *
+ * Only the identity Dify promises is provided here. `sys.query` / `sys.files`
+ * are NOT synthesized from the session: a run's current input is the caller's
+ * `inputs`, not "whatever the agent last said", so inferring them would guess.
+ *
+ * @param session - the live session from the tool execution context, if any.
+ * @returns a record merged into the run's `args`; empty when there is no session.
+ */
+function systemVariables(session) {
+  if (session === null || session === undefined) return {}
+  const out = {}
+  const id = session.id
+  if (typeof id === 'string' && id.length > 0) out['sys.conversation_id'] = id
+  // Dify's `dialogue_count` counts the user's turns. A raw count of `role: 'user'`
+  // messages would over-count: the loop also appends protocol-injected user
+  // messages (instructions, runtime snapshots), which are not the user talking.
+  // Reuse the same filter the memory adapter applies so both agree.
+  try {
+    if (typeof session.deriveMessages === 'function') {
+      out['sys.dialogue_count'] = deriveChatHistory(session.deriveMessages()).filter((item) => item.role === 'user').length
+    }
+  } catch {
+    // A log that cannot be read costs the count, never the run.
+  }
+  return out
+}
+
+/**
+ * Diagnostics attributable to one node id, plus the node's declared support
+ * level. Warnings never fail a run: they record what the graph will *not* do.
+ */
+function nodeDiagnostics(inspection, nodeId) {
+  // Field-drop subjects are `"<nodeId>:<field>"`; node-level subjects are the id.
+  const rows = (inspection?.diagnostics ?? []).filter((row) => row.subject === nodeId || row.subject.startsWith(`${nodeId}:`))
+  const support = (inspection?.support ?? []).find((row) => row.id === nodeId)
+  return {
+    ...(support?.mode !== undefined && support.mode !== 'full' ? { mode: support.mode } : {}),
+    ...(rows.length > 0 ? { warnings: rows.map((row) => row.message) } : {}),
+  }
+}
+
 function renderInspect(_args, value) {
   const lines = [
     `Dify "${value.appName}" (${value.mode}): ${value.nodeCount} nodes — ${Object.entries(value.nodeTypes).map(([t, n]) => `${t}×${n}`).join(', ')}`,
@@ -72,6 +121,20 @@ function renderInspect(_args, value) {
   }
   if ((value.issues ?? []).length > 0) lines.push(`issues: ${value.issues.join('; ')}`)
   if (value.compileError) lines.push(`compile error: ${value.compileError}`)
+  // Engineer-facing support report: only nodes that are not fully implemented.
+  const partial = (value.support ?? []).filter((row) => row.mode !== 'full')
+  if (partial.length > 0) {
+    lines.push(
+      'support (nodes not fully implemented):',
+      ...partial.map((row) => `- ${row.id} ${row.kind}: ${row.mode} — ${row.reason}`),
+    )
+  }
+  if ((value.diagnostics ?? []).length > 0) {
+    lines.push(
+      `diagnostics (${Object.entries(value.diagnosticCodes ?? {}).map(([code, n]) => `${code}×${n}`).join(', ')}):`,
+      ...value.diagnostics.map((row) => `- [${row.code}] ${row.message}`),
+    )
+  }
   if (value.script) lines.push('', 'generated workflow script:', value.script)
   return [{ type: 'text', text: lines.join('\n') }]
 }
@@ -85,6 +148,7 @@ function renderRun(_args, value) {
       ([id, node]) => {
         const type = node.kind ?? (node.backendArgv0 ? 'code' : 'node')
         const route = node.meta?.provider ? ` route=${node.meta.provider}/${node.meta.model}` : ''
+        const support = node.mode !== undefined && node.mode !== 'full' ? ` [${node.mode}]` : ''
         const branch =
           node.branch ??
           (typeof node.outputs?.result === 'string'
@@ -92,11 +156,17 @@ function renderRun(_args, value) {
             : typeof node.outputs?.class_id === 'string'
               ? `class=${node.outputs.class_id}`
               : '')
-        return `- ${id} ${type} ${node.title ?? ''}: ${node.ok === false ? 'failed' : 'ok'}${route}${branch ? ` branch=${branch}` : ''}${node.enforcement ? ` [${node.enforcement}]` : ''}${node.ok === false ? ` — ${node.error}` : ''}`
+        return `- ${id} ${type} ${node.title ?? ''}: ${node.ok === false ? 'failed' : 'ok'}${route}${branch ? ` branch=${branch}` : ''}${support}${node.enforcement ? ` [${node.enforcement}]` : ''}${node.ok === false ? ` — ${node.error}` : ''}`
       },
     ),
     `usage: ${JSON.stringify(value.usage ?? {})}, agentsStarted=${value.agentsStarted ?? 0}, durationMs=${value.durationMs ?? '?'}`,
   ]
+  // Engineer-facing report of nodes that ran without their full Dify semantics.
+  // Never an error: the run still succeeded.
+  const warnings = value.nodes
+    ? Object.entries(value.nodes).flatMap(([id, node]) => (node.warnings ?? []).map((text) => `- ${id}: ${text}`))
+    : []
+  if (warnings.length > 0) lines.push(`node warnings (${warnings.length}):`, ...warnings)
   return [{ type: 'text', text: lines.join('\n') }]
 }
 
@@ -320,13 +390,24 @@ function createRunTool(ctx) {
         run = engine.start({
           meta: compiled.meta,
           script,
-          args: { ...inputs },
+          // `sys.*` mirrors Dify's system variables. The conversation identity
+          // comes from the live harness session: `sys.conversation_id` is its id,
+          // and `sys.dialogue_count` is the number of real user turns so far.
+          args: { ...inputs, ...systemVariables(parent.session) },
           parent,
           subagentProvider: 'dify-node',
         })
         const result = await run.result
         const value = result.value ?? {}
         const nodes = value.nodes ?? {}
+        // Annotate each executed node with its declared support level and the
+        // compile-time diagnostics attributable to it. Diagnostics never change
+        // `status`: a run that completed still reports `succeeded`.
+        for (const [id, node] of Object.entries(nodes)) {
+          const extra = nodeDiagnostics(inspection, id)
+          if (extra.mode !== undefined) node.mode = extra.mode
+          if (extra.warnings !== undefined) node.warnings = extra.warnings
+        }
         const ok = result.stopReason === 'completed'
         const record = {
           status: ok ? 'succeeded' : 'failed',
@@ -336,6 +417,14 @@ function createRunTool(ctx) {
           outputs: ok ? (value.outputs ?? {}) : {},
           answers: ok ? (value.answers ?? []) : [],
           nodes,
+          // Nodes that never ran still carry their compile-time diagnostics, so
+          // a dead branch does not hide an unsupported node.
+          unexecuted: (inspection.support ?? [])
+            .filter((row) => row.mode !== 'full' && nodes[row.id] === undefined)
+            .map((row) => ({ id: row.id, kind: row.kind, mode: row.mode, reason: row.reason })),
+          diagnostics: inspection.diagnostics ?? [],
+          diagnosticCodes: inspection.diagnosticCodes ?? {},
+          support: inspection.support ?? [],
           usage: (() => {
             const total = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
             for (const node of Object.values(nodes)) {
@@ -362,6 +451,9 @@ function createRunTool(ctx) {
           appName: parsed.appName,
           outputs: {},
           nodes: {},
+          diagnostics: inspection.diagnostics ?? [],
+          diagnosticCodes: inspection.diagnosticCodes ?? {},
+          support: inspection.support ?? [],
           events,
           script,
           durationMs: Date.now() - startedAt,

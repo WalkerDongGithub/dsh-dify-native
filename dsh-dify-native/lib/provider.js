@@ -24,6 +24,29 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { basename, isAbsolute, join } from 'node:path'
+import { applyMemoryWindow, deriveChatHistory, memoryOptions, toPromptText } from './session-history.js'
+import { renderJinja } from './jinja.js'
+
+/**
+ * Read the conversation history from a live harness session.
+ *
+ * A session is the harness's conversation store, so a Dify `memory.window` node
+ * can be fed from it directly instead of from a Dify-style Message table. When
+ * the run has no session (an offline/one-shot caller) there is no history and
+ * the LLM node behaves exactly as before.
+ *
+ * @param session - `request.parent.session`, if the caller supplied one.
+ * @returns ordered `[{ role, content }]`, or `[]` when unavailable.
+ */
+function readSessionHistory(session) {
+  try {
+    if (session === null || session === undefined || typeof session.deriveMessages !== 'function') return []
+    return deriveChatHistory(session.deriveMessages())
+  } catch {
+    // History is an enrichment: a log that cannot be read must not fail the node.
+    return []
+  }
+}
 
 /** The Python trampoline: define Dify's `main`, feed it the node inputs, emit JSON. */
 const PY_WRAPPER = `
@@ -205,7 +228,24 @@ async function executeSpec(ctx, spec, request, env) {
   if (spec.kind === 'datasource') return executeDatasource(ctx, spec, request, env)
   if (spec.kind === 'knowledge-index') return executeKnowledgeIndex(ctx, spec, request, env)
   if (spec.kind === 'human-input') return executeHumanInput(spec)
+  if (spec.kind === 'template-transform') return executeTemplateJinja(spec)
   return { ok: false, error: `unsupported node kind "${spec.kind}"` }
+}
+
+/**
+ * Dify `template-transform` with Jinja2.
+ *
+ * The compiler has already resolved `{{#node.var#}}` selectors and passed the
+ * resulting values as `spec.context`; what remains is Jinja2, rendered here by
+ * nunjucks. An unrenderable template is the author's mistake, so the node fails
+ * with the construct and its line — never a silent pass-through of raw text.
+ */
+function executeTemplateJinja(spec) {
+  const result = renderJinja(spec.template ?? '', spec.context ?? {})
+  if (!result.ok) {
+    return { ok: false, error: `template-transform ${spec.nodeId}: invalid Jinja2 template — ${result.error}` }
+  }
+  return { ok: true, outputs: { output: result.text, text: result.text }, meta: { engine: 'nunjucks' } }
 }
 
 /** Run a Dify code node under the harness's own confinement. */
@@ -367,6 +407,19 @@ async function executeLlm(ctx, spec, request, env) {
       role: item.role === 'assistant' ? 'assistant' : 'user',
       content: [{ type: 'text', text: String(item.text ?? '') }],
     }))
+  // Dify memory: prepend the conversation history from the harness session log
+  // when the node enables `memory.window`. The history is agent-context, not a
+  // conversation store: a run without a session simply gets no history.
+  const memory = memoryOptions(spec.memory)
+  let memoryMeta
+  if (memory.enabled) {
+    const history = applyMemoryWindow(readSessionHistory(request.parent?.session), memory)
+    if (history.length > 0) {
+      const rendered = toPromptText(history, memory.rolePrefix)
+      messages.unshift({ role: 'user', content: [{ type: 'text', text: `Conversation history:\n${rendered}` }] })
+    }
+    memoryMeta = { enabled: true, size: memory.size, historyMessages: history.length }
+  }
   let note
   if (messages.length === 0) {
     // Dify allows a system-only prompt; some OpenAI-compatible gateways reject
@@ -397,6 +450,7 @@ async function executeLlm(ctx, spec, request, env) {
       requested: spec.provider && spec.model ? `${spec.provider}/${spec.model}` : '',
       routeSource: route.source,
       finish: call.finish,
+      ...(memoryMeta !== undefined ? { memory: memoryMeta } : {}),
       ...(call.note !== undefined ? { adapterNote: call.note } : {}),
     },
   }

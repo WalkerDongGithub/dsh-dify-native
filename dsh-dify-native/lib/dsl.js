@@ -25,6 +25,8 @@
  * `is_parallel: true`), so loop bounds and item order are code, not model.
  */
 import { parse as parseYaml } from 'yaml'
+import { createDiagnostics, reportDroppedFields } from './diagnostics.js'
+import { compileJinja, hasJinja } from './jinja.js'
 
 /**
  * Canonical node kinds. The first block is Dify's `BlockEnum` (web types.ts),
@@ -110,6 +112,123 @@ const MARKER_KINDS = new Set(['iteration-start', 'iteration-end', 'loop-start', 
 
 /** Kinds that produce no work and may sit disconnected on the canvas. */
 const NON_EXECUTABLE_KINDS = new Set(['note'])
+
+/**
+ * Node-data keys this compiler reads, per canonical kind. A key present in a
+ * node's `data` but absent here is reported as dropped: the DSL set a value
+ * that has no effect on this runtime.
+ */
+const CONSUMED_FIELDS = {
+  start: new Set(['variables']),
+  end: new Set(['outputs']),
+  answer: new Set(['answer', 'variables']),
+  llm: new Set(['model', 'prompt_template', 'variables', 'context', 'vision', 'memory']),
+  code: new Set(['code_language', 'code', 'variables', 'outputs']),
+  'if-else': new Set(['cases', 'logical_operator']),
+  'question-classifier': new Set(['model', 'classes', 'query_variable_selector', 'instruction', 'instructions', 'topics', 'memory']),
+  'http-request': new Set(['method', 'url', 'headers', 'params', 'body', 'authorization', 'error_strategy', 'default_value', 'timeout']),
+  tool: new Set(['provider_id', 'provider_name', 'provider_type', 'tool_name', 'tool_label', 'tool_parameters']),
+  'knowledge-retrieval': new Set(['dataset_ids', 'query_variable_selector', 'retrieval_setting', 'single_retrieval_config', 'multiple_retrieval_config']),
+  'knowledge-index': new Set(['dataset_id', 'index_chunk_variable_selector', 'keyword_number']),
+  agent: new Set(['agent_strategy_name', 'agent_strategy_label', 'version', 'agent_parameters', 'agent_job', 'output_schema', 'model', 'memory']),
+  'parameter-extractor': new Set(['model', 'query', 'query_variable_selector', 'instruction', 'reasoning_mode', 'parameters', 'memory']),
+  'document-extractor': new Set(['is_array_file', 'variable_selector']),
+  'list-operator': new Set(['variable', 'filter_by', 'order_by', 'limit']),
+  datasource: new Set(['provider_name', 'provider_id', 'provider_type', 'datasource_name', 'datasource_label', 'datasource_parameters']),
+  'human-input': new Set(['user_actions', 'form_content', 'inputs', 'timeout', 'timeout_unit']),
+  iteration: new Set(['iterator_selector', 'output_selector', 'is_parallel', 'parallel_nums', 'error_handle_mode', 'start_node_id', 'output_type']),
+  loop: new Set(['loop_count', 'loop_count_selector', 'break_conditions', 'logical_operator', 'error_handle_mode', 'start_node_id']),
+  'template-transform': new Set(['template', 'variables']),
+  assigner: new Set(['items', 'version', 'assigned_variable_selector', 'input_variable_selector', 'write_mode', 'value']),
+  'variable-aggregator': new Set(['output_type', 'variables', 'advanced_settings']),
+  'iteration-start': new Set(['variables']),
+  'loop-start': new Set(),
+  'loop-end': new Set(['outputs']),
+  'iteration-end': new Set(['outputs']),
+  note: new Set(['text']),
+  trigger: new Set(['method', 'content_type', 'variables', 'status_code', 'schedule_type', 'cron', 'mode', 'endpoint']),
+  'trigger-schedule': new Set(['schedule_type', 'cron', 'mode', 'variables']),
+  'trigger-webhook': new Set(['method', 'content_type', 'variables', 'status_code', 'endpoint']),
+  'trigger-plugin': new Set(['provider_name', 'provider_id', 'event', 'variables']),
+  generic: new Set(),
+}
+
+/**
+ * Completion parameters carried into the LLM request. Any other key under
+ * `model.completion_params` is reported by {@link reportModelGaps}.
+ */
+const CONSUMED_COMPLETION_PARAMS = new Set(['temperature', 'max_tokens'])
+
+/**
+ * Completion parameters that are harmless at their default and equal to it in
+ * most real exports (`top_p: 1`, zero penalties). Reporting them would bury the
+ * parameters that actually change model behaviour, so they are skipped only
+ * while their value is the provider default.
+ */
+const DEFAULT_SILENT_COMPLETION_PARAMS = {
+  top_p: 1,
+  presence_penalty: 0,
+  frequency_penalty: 0,
+  max_tokens: undefined,
+}
+
+/**
+ * Inspect a node for DSL values this runtime does not implement. The generic
+ * sweep over `data` (in `buildIR`) covers top-level keys; this pass handles the
+ * two nested shapes that sweep cannot see: `model.completion_params.*` and
+ * `context.enabled`, which changes what `{{#context#}}` contains.
+ */
+function reportModelGaps(diagnostics, node) {
+  const { id, kind, data } = node
+  if (data === null || typeof data !== 'object') return
+  const model = data.model
+  if (model !== null && typeof model === 'object') {
+    for (const [key, value] of Object.entries(model.completion_params ?? {})) {
+      if (CONSUMED_COMPLETION_PARAMS.has(key)) continue
+      // Skip a parameter that is present at its provider default: it cannot
+      // change behaviour, so reporting it would be noise, not signal.
+      if (key in DEFAULT_SILENT_COMPLETION_PARAMS && value === DEFAULT_SILENT_COMPLETION_PARAMS[key]) continue
+      diagnostics.dropped(id, `model.completion_params.${key}`, kind)
+    }
+  }
+  // `context.enabled` switches `{{#context#}}` from empty to retrieval segments;
+  // without it the reference always renders empty.
+  if (data.context !== null && typeof data.context === 'object' && data.context.enabled === true) {
+    diagnostics.dropped(id, 'context.enabled', kind)
+  }
+  // `vision` is read into the node spec but no image ever reaches the prompt;
+  // only an *enabled* vision block is a behavioural gap (disabled is the default).
+  if (data.vision !== null && typeof data.vision === 'object' && data.vision.enabled === true) {
+    diagnostics.dropped(id, 'vision', kind)
+  }
+}
+
+/**
+ * Compile-check a `template-transform` node's Jinja2 template.
+ *
+ * Jinja2 itself is rendered at execution time by `lib/jinja.js` (nunjucks). This
+ * pass compiles the template up front so a syntax error surfaces in
+ * `dify_native_inspect` — before anything runs — instead of after a graph has
+ * already spent models and time. It is a report, not a gate: compilation still
+ * succeeds, and the run fails the node with the same message.
+ *
+ * Only `template-transform` is checked: LLM prompts use `{{ name }}` local
+ * bindings by design (see `renderTextExpr`), so scanning them would be noise.
+ *
+ * @param diagnostics - collector from {@link createDiagnostics}.
+ * @param node - normalized IR node.
+ */
+function reportTemplateGaps(diagnostics, node) {
+  if (node.kind !== 'template-transform') return
+  const template = node.data?.template
+  if (typeof template !== 'string' || template.length === 0) return
+  // Selector references are resolved by this compiler before Jinja runs, so
+  // they must be blanked for the check: `{{#a.b#}}` is not Jinja and would
+  // otherwise be reported as an unbalanced `}}`.
+  const checkable = template.replace(/\{\{#([^#{}]+)#\}\}/g, '')
+  const problem = compileJinja(checkable)
+  if (problem !== undefined) diagnostics.templateInvalid(node.id, node.kind, problem)
+}
 
 function nodeType(node) {
   return node?.data?.type ?? node?.type
@@ -272,11 +391,21 @@ export function buildIR(parsed) {
   const nodes = parsed.nodes.map(normalizeNode)
   const byId = new Map(nodes.map((node) => [node.id, node]))
   const warnings = []
+  // Structured side channel for engineers: every skip / drop / simplification.
+  // `warnings` stays the plain-string list; `diagnostics` keeps code + subject.
+  const diagnostics = createDiagnostics()
 
   for (const node of nodes) {
     if (node.kind === 'generic') {
       warnings.push(`node ${node.id} has unknown type "${node.rawType}"; parsed as generic passthrough`)
+      diagnostics.unknown(node.id, node.rawType)
+      continue
     }
+    // Report every node-data value this compiler does not read, then the nested
+    // model parameters. Both are non-fatal: the graph still compiles and runs.
+    reportDroppedFields(diagnostics, node.id, node.kind, node.data, CONSUMED_FIELDS[node.kind] ?? new Set())
+    reportModelGaps(diagnostics, node)
+    reportTemplateGaps(diagnostics, node)
   }
 
   // Container children: ReactFlow `parentId`, Dify's `data.iteration_id` /
@@ -346,10 +475,14 @@ export function buildIR(parsed) {
     const endMarker = container.children.find((child) => child.kind === `${container.kind}-end`)
     container.endId = endMarker?.id
     if (container.children.length === 0) {
-      warnings.push(`container ${container.id} (${container.kind}) has no child nodes associated by parentId/iteration_id/loop_id`)
+      const message = `container ${container.id} (${container.kind}) has no child nodes associated by parentId/iteration_id/loop_id`
+      warnings.push(message)
+      diagnostics.note(container.id, message)
     }
     if (container.startId !== undefined && !childIds.has(container.startId)) {
-      warnings.push(`container ${container.id} start_node_id ${container.startId} is not one of its children`)
+      const message = `container ${container.id} start_node_id ${container.startId} is not one of its children`
+      warnings.push(message)
+      diagnostics.note(container.id, message)
     }
   }
 
@@ -387,6 +520,8 @@ export function buildIR(parsed) {
     requiredInputs,
     unknownKinds: [...new Set(nodes.filter((n) => n.kind === 'generic').map((n) => n.rawType))],
     warnings,
+    diagnostics: diagnostics.list(),
+    diagnosticCodes: diagnostics.codes(),
   }
 }
 
@@ -740,14 +875,73 @@ export function inspectIR(ir) {
       endId: container.endId ?? null,
       children: container.children.map((child) => child.id),
     })),
+    // Per-node support level, so a caller can see at a glance which nodes run
+    // with their full Dify semantics and which are simplified / placeholders.
+    support: nodeSupport(ir),
     unknownKinds: ir.unknownKinds,
     // Kept for callers/tests from earlier rounds: complete coverage means this
     // list is always empty; unknown future types are visible in `unknownKinds`.
     unsupported: [],
     issues,
     warnings: ir.warnings,
+    // Structured sibling of `warnings`: { severity, code, subject, message }.
+    // For engineers; never surfaced to an end user as an error.
+    diagnostics: ir.diagnostics ?? [],
+    diagnosticCodes: ir.diagnosticCodes ?? {},
     nodeIds: ir.nodes.map((node) => node.id),
   }
+}
+
+/**
+ * Support level of every node that does work, for `dify_native_inspect`.
+ * `full` means the node implements the Dify surface this runtime targets;
+ * `simplified` means a documented subset; `placeholder` means it is scheduled
+ * but does not perform the node's work; `passthrough` means unknown type.
+ */
+function nodeSupport(ir) {
+  const rows = []
+  for (const node of ir.nodes) {
+    if (MARKER_KINDS.has(node.kind) || node.kind === 'start' || node.kind === 'end' || node.kind === 'note') continue
+    let mode = 'full'
+    let reason = ''
+    if (node.kind === 'generic') {
+      mode = 'passthrough'
+      reason = 'unknown node type'
+    } else if (node.kind === 'knowledge-index') {
+      mode = 'placeholder'
+      reason = 'no vector store mounted; nothing is written'
+    } else if (node.kind === 'knowledge-retrieval') {
+      mode = 'simplified'
+      reason = 'lexical grep over local files, not embedding retrieval'
+    } else if (node.kind === 'agent') {
+      mode = 'simplified'
+      reason = 'single model turn; declared tools are not executed'
+    } else if (node.kind === 'document-extractor') {
+      mode = 'simplified'
+      reason = 'text-like files only (no PDF/office extraction)'
+    } else if (node.kind === 'human-input') {
+      mode = 'simplified'
+      reason = 'resolved from run args / first declared action; no pause/resume'
+    } else if (node.kind === 'datasource') {
+      mode = 'simplified'
+      reason = 'local JSON/JSONL/text file only, not a Dify datasource plugin'
+    }
+    // A dropped field on an otherwise-full node is still a partial implementation.
+    // Diagnostic subjects are `"<nodeId>:<field>"` for field drops and the bare
+    // node id for node-level ones, so match on the prefix.
+    if (reason.length === 0 && (ir.diagnostics ?? []).some((row) => row.code === 'field-dropped' && row.subject.split(':')[0] === node.id)) {
+      mode = 'simplified'
+      reason = 'some declared fields were dropped'
+    }
+    // An invalid Jinja2 template is worse than a dropped field: the node is
+    // reached and fails. Report it ahead of the generic drop reason.
+    if ((ir.diagnostics ?? []).some((row) => row.code === 'template-jinja-invalid' && row.subject.split(':')[0] === node.id)) {
+      mode = 'simplified'
+      reason = 'Jinja2 template does not compile; the node fails when reached'
+    }
+    rows.push({ id: node.id, kind: node.kind, mode, ...(reason.length > 0 ? { reason } : {}) })
+  }
+  return rows
 }
 
 /** Inspect a parsed DSL (convenience wrapper around {@link buildIR}). */
@@ -853,12 +1047,29 @@ export function compileGraph(parsed, options = {}) {
     (parsed.environmentVariables ?? []).filter((v) => v?.name).map((v) => [String(v.name), v.value ?? '']),
   )
   lines.push(`const __vars = ${JSON.stringify({ conversation, environment })}`)
+  // Dify system variables. `conversation_id` / `dialogue_count` are injected by
+  // the run as `args['sys.*']` from the calling harness session (see
+  // `systemVariables` in index.js); when absent they stay undefined, which the
+  // empty-string defaults below absorb.
   lines.push(
-    `__vars.sys = { query: args['sys.query'] ?? args['query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '' }`,
+    `__vars.sys = { query: args['sys.query'] ?? args['query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '', conversation_id: args['sys.conversation_id'] ?? '', dialogue_count: args['sys.dialogue_count'] ?? 0, workflow_run_id: args['sys.workflow_run_id'] ?? '', timestamp: args['sys.timestamp'] ?? 0 }`,
   )
   // `entity` is what Dify calls the item of a list-operator / iteration body in
   // some exports; keep the common ones resolvable.
   if (counters.var > 0) lines.push(`let ${[...varByNode.values()].join(', ')}`)
+  // Jinja2 rendering for template-transform. The engine's script VM exposes no
+  // host function, so it goes through `agent()` like every other node and is
+  // performed by the `dify-node` provider (nunjucks lives on the JS side).
+  // An invalid template is the author's error and fails the node — never
+  // silently fall back to the raw template text.
+  lines.push(`const __jinja = async (template, context, nodeId, title) => {
+  const req = { kind: 'template-transform', nodeId, title, template, context }
+  const raw = await agent(JSON.stringify(req), { label: 'template-transform:' + (title || nodeId) })
+  if (raw === null) throw new Error('dify node ' + nodeId + ' (template-transform) failed: no result from provider')
+  const res = JSON.parse(raw)
+  if (!res.ok) throw new Error('dify node ' + nodeId + ' (template-transform:' + (title || '') + ') failed: ' + (res.error ?? 'unknown error'))
+  return res.outputs
+}`)
 
   const scope = {
     startId: ir.startId,
@@ -944,6 +1155,9 @@ export function compileGraph(parsed, options = {}) {
         role: item.role === 'system' ? 'system' : item.role === 'assistant' ? 'assistant' : 'user',
         text: '',
       }))
+      // Memory is fed from the harness session log at execution time; only the
+      // node's declaration travels in the spec.
+      if (data.memory !== null && typeof data.memory === 'object') spec.memory = data.memory
     } else if (kind === 'question-classifier') {
       const model = data.model ?? {}
       const params = model.completion_params ?? {}
@@ -1215,9 +1429,33 @@ export function compileGraph(parsed, options = {}) {
       return
     }
     if (kind === 'template-transform') {
-      const expr = renderTextExpr(String(data.template ?? ''), scope, localBindings(node, scope))
+      const template = String(data.template ?? '')
+      if (!hasJinja(template)) {
+        // Selector-only template: rendered inline with zero agent calls. This is
+        // the common case and stays exactly as fast as before.
+        const expr = renderTextExpr(template, scope, localBindings(node, scope))
+        lines.push(`${pad}if (${guard}) {`)
+        lines.push(`${pad}  ${variable} = { ok: true, kind: 'template-transform', title: ${JSON.stringify(node.title)}, outputs: { output: ${expr} } }`)
+        lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+        lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+        lines.push(`${pad}}`)
+        return
+      }
+      // Jinja2 template. Dify resolves `{{#node.var#}}` selectors BEFORE Jinja2
+      // runs, so this emits a template whose selectors have already been
+      // substituted with their values, plus a variable context for Jinja.
       lines.push(`${pad}if (${guard}) {`)
-      lines.push(`${pad}  ${variable} = { ok: true, kind: 'template-transform', title: ${JSON.stringify(node.title)}, outputs: { output: ${expr} } }`)
+      lines.push(`${pad}  const __ctx = {}`)
+      // `localBindings` maps each declared variable (plus `context`) to the JS
+      // expression that reads it, so the Jinja runtime sees real values.
+      for (const [name, expr] of localBindings(node, scope)) {
+        lines.push(`${pad}  __ctx[${JSON.stringify(name)}] = ${expr}`)
+      }
+      // Selector substitution happens as a plain string render first; the
+      // result is then handed to nunjucks unchanged.
+      lines.push(`${pad}  const __tpl = ${renderTextExpr(template, scope, localBindings(node, scope))}`)
+      lines.push(`${pad}  const __res = await __jinja(__tpl, __ctx, ${JSON.stringify(node.id)}, ${JSON.stringify(node.title ?? '')})`)
+      lines.push(`${pad}  ${variable} = { ok: true, kind: 'template-transform', title: ${JSON.stringify(node.title)}, outputs: __res }`)
       lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
       lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
       lines.push(`${pad}}`)
@@ -1452,8 +1690,15 @@ export function compileGraph(parsed, options = {}) {
     lines.push(`${pad}  const ${ranVar} = {}`)
     lines.push(`${pad}  const ${branchVar} = {}`)
 
+    // Body result variables MUST be declared per item. The script runs in a
+    // vm realm that is not strict mode, so an undeclared assignment would land
+    // on the shared global object — and a parallel iteration's items would then
+    // overwrite each other's intermediate results between two `await`s.
+    const bodyDecl = childVars.size > 0 ? `let ${[...childVars.values()].join(', ')}` : ''
+
     if (isParallel) {
       lines.push(`${pad}  const __parallel${index} = await parallel(${itemsVar}.map((${itemVar}, ${idxVar}) => async () => {`)
+      if (bodyDecl) lines.push(`${pad}    ${bodyDecl}`)
       lines.push(`${pad}    try {`)
       emitBody(level + 3)
       lines.push(`${pad}      const __v = ${outputExpr}`)
@@ -1477,6 +1722,7 @@ export function compileGraph(parsed, options = {}) {
       const count = node.kind === 'loop' ? `${itemsVar}.length` : `${itemsVar}.length`
       lines.push(`${pad}  for (let ${idxVar} = 0; ${idxVar} < ${count}; ${idxVar}++) {`)
       lines.push(`${pad}    const ${itemVar} = ${node.kind === 'loop' ? idxVar : `${itemsVar}[${idxVar}]`}`)
+      if (bodyDecl) lines.push(`${pad}    ${bodyDecl}`)
       if (continueOnError) {
         lines.push(`${pad}    let __itemFailed = false`)
         lines.push(`${pad}    let __itemValue = null`)
