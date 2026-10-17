@@ -33,7 +33,9 @@ for test in \
   tests/engine-human-wait.test.mjs \
   tests/engine-http-follow.test.mjs \
   tests/engine-human-form.test.mjs \
-  tests/engine-schedule-visual.test.mjs
+  tests/engine-schedule-visual.test.mjs \
+  tests/engine-extraction-routing.test.mjs \
+  tests/package-deployment.test.mjs
 do
   echo "== $test"
   node "$test"

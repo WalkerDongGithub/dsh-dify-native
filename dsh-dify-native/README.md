@@ -2,8 +2,7 @@
 
 在 **dsh harness 自己的能力上**执行真实的 Dify 工作流 `.yml`。
 
-不写调度器，不写执行器，不写沙箱，不写 LLM 客户端。这个包只做一件事：
-把 Dify 的 DSL 翻译成一段编排脚本，然后让 harness 已经装好的那几个服务去跑它。
+把 Dify DSL 翻译成编排脚本，交给 harness 的真实引擎、沙箱和模型服务执行。另提供显式配置的本地事件/定时桥与人工等待快照；完整能力及 S 余项见 [当前能力报告](docs/capability-report.md)。
 
 ```
 Dify .yml
@@ -22,25 +21,15 @@ Dify .yml
 。
 **dsh 源码零改动。**
 
-第三方依赖三个，都**不装进 dsh 安装目录**：
+三个 JavaScript 依赖都由插件直接声明并锁定，安装在插件自己的 node_modules：
 
-| 依赖 | 用途 | 来源 |
-| --- | --- | --- |
-| `yaml` | 解析 Dify `.yml`，以及 `lib/tool-contracts.js` 里的工具契约 YAML | dsh 部署本身已带 |
-| `ajv` | LLM 节点 `structured_output` 的 JSON Schema 校验（含一次修复回合） | dsh 运行期自带（`@deepseek-ai/dsh` 的依赖），已在 `lib/provider.js` 里直接 `import` |
-| `nunjucks` | `template-transform` 的 Jinja2 渲染（Jinja2 的 JS 移植） | 插件自己声明 |
+| 依赖 | 用途 |
+| --- | --- |
+| yaml | DSL 与声明式契约解析 |
+| ajv | 结构化输出与 agent 工具参数的 JSON Schema 校验 |
+| nunjucks | Jinja2 模板渲染 |
 
-`nunjucks` 装在**插件自己的 `node_modules/`** 并写进了 `package.json` 的 `dependencies`，
-插件通过 `link:` 挂进 profile 时 Node 会向上解析到它，无需额外配置。
-`ajv` 由 dsh 安装自带（`@deepseek-ai/dsh` 的依赖），`lib/provider.js` 直接 `import 'ajv'`，
-按 Node 的解析规则向上查找 `node_modules`。用 `link:` 挂载时本仓库位于
-`/home/walker/dify-test/dsh-dify-native`，**不**在 `<dsh 安装目录>/node_modules` 之下——
-这种布局下 `ajv` 能否解析取决于 profile / 安装方式，本仓库没有为此写入 `package.json` 依赖。
-把插件单独拷到别处运行前需自行提供 `ajv`。
-
-> 代价：`structured_output` 依赖 dsh 自带的 `ajv`，这是一条未写进本包 `package.json` 的隐式依赖。
-> 只有在 `ajv` 确实能被解析到时 `lib/provider.js` 才能加载；解析不到时不是"跳过校验"，
-> 而是插件加载即失败（模块解析错误）。
+源码检出用 `npm ci`。npm 包包含 Python requirements、安装脚本及部署文档；提取/调度依赖安装到新的插件自有目录，既有目录拒绝覆盖。完整步骤与干净打包验证见 [部署说明](docs/deployment.md)。
 
 
 ---
