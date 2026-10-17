@@ -127,7 +127,7 @@ const CONSUMED_FIELDS = {
   'if-else': new Set(['cases', 'logical_operator']),
   'question-classifier': new Set(['model', 'classes', 'query_variable_selector', 'instruction', 'instructions', 'topics', 'memory']),
   'http-request': new Set(['method', 'url', 'headers', 'params', 'body', 'authorization', 'error_strategy', 'default_value', 'timeout']),
-  tool: new Set(['provider_id', 'provider_name', 'provider_type', 'tool_name', 'tool_label', 'tool_parameters']),
+  tool: new Set(['provider_id', 'provider_name', 'provider_type', 'tool_name', 'tool_label', 'tool_parameters', 'tool_configurations', 'settings']),
   'knowledge-retrieval': new Set(['dataset_ids', 'query_variable_selector', 'retrieval_setting', 'single_retrieval_config', 'multiple_retrieval_config']),
   'knowledge-index': new Set(['dataset_id', 'index_chunk_variable_selector', 'keyword_number']),
   agent: new Set(['agent_strategy_name', 'agent_strategy_label', 'version', 'agent_parameters', 'agent_job', 'output_schema', 'model', 'memory']),
@@ -1316,6 +1316,12 @@ export function compileGraph(parsed, options = {}) {
     }
     if (kind === 'tool') {
       lines.push(`${pad}  ${reqVar}.arguments = ${toolArgumentsExpr(data.tool_parameters, scope)}`)
+      // `tool_configurations` is the user-configured half of a tool call (API
+      // keys, per-provider settings). Dify keeps it separate from the per-call
+      // `tool_parameters`; both are forwarded now.
+      if (data.tool_configurations !== null && typeof data.tool_configurations === 'object') {
+        lines.push(`${pad}  ${reqVar}.configurations = ${parameterObjectExpr(data.tool_configurations, scope)}`)
+      }
     }
     if (kind === 'knowledge-retrieval') {
       lines.push(`${pad}  ${reqVar}.query = ${selectorExpr(data.query_variable_selector, scope)}`)

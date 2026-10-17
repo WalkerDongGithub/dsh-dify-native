@@ -13,6 +13,8 @@ for test in \
   tests/session-memory.test.mjs \
   tests/sys-vars.test.mjs \
   tests/provider.test.mjs \
+  tests/tool-contracts.test.mjs \
+  tests/tool-node.test.mjs \
   tests/structured-output.test.mjs \
   tests/translation-script.test.mjs
 do

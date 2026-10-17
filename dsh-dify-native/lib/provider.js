@@ -27,6 +27,7 @@ import Ajv from 'ajv'
 import { basename, isAbsolute, join } from 'node:path'
 import { applyMemoryWindow, deriveChatHistory, memoryOptions, toPromptText } from './session-history.js'
 import { renderJinja } from './jinja.js'
+import { createToolRegistry, executeContract } from './tool-contracts.js'
 
 /**
  * Read the conversation history from a live harness session.
@@ -214,7 +215,12 @@ export function createDifyNodeProvider(ctx, options = {}) {
   const llmModel = options.llmModel ?? process.env.DIFY_LLM_MODEL ?? ''
   const knowledgeRoot = options.knowledgeRoot ?? process.env.DIFY_KNOWLEDGE_ROOT ?? ''
   const documentRoot = options.documentRoot ?? process.env.DIFY_DOCUMENT_ROOT ?? ''
-  const toolAllow = options.toolAllow ?? process.env.DIFY_TOOL_ALLOW ?? 'web_search,web_fetch'
+  const toolAllow = options.toolAllow ?? process.env.DIFY_TOOL_ALLOW ?? ''
+  // Declarative tool contracts: directories scanned for provider/tool YAML.
+  const toolRoots = options.toolRoots ?? (process.env.DIFY_TOOLS_ROOT ?? '').split(':').filter((item) => item.length > 0)
+  const toolRegistry = options.toolRegistry ?? createToolRegistry(toolRoots)
+  // Exact harness-tool names a workflow may call directly (opt-in passthrough).
+  const toolPassthrough = options.toolPassthrough ?? process.env.DIFY_TOOL_PASSTHROUGH ?? ''
 
   return {
     name: options.name ?? 'dify-node',
@@ -257,6 +263,8 @@ export function createDifyNodeProvider(ctx, options = {}) {
             knowledgeRoot,
             documentRoot,
             toolAllow,
+            toolRegistry,
+            toolPassthrough,
           })
         } catch (error) {
           payload = { ok: false, error: `${error?.name ?? 'Error'}: ${error?.message ?? String(error)}` }
@@ -1129,41 +1137,87 @@ async function executeHttpCurl(ctx, spec, request, { method, url, headers }) {
   }
 }
 
-/** Dify tool names this runtime can serve from an existing harness tool. */
-const TOOL_ALIASES = {
-  jina_reader: 'web_fetch',
-  jina_search: 'web_search',
-  fetch: 'web_fetch',
-  search: 'web_search',
-}
-
-function toolAllowSet(env) {
-  return new Set(
-    String(env.toolAllow ?? '')
-      .split(',')
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0),
-  )
-}
-
 /**
- * Dify tool node: translate its provider/tool name to an existing harness tool
- * and dispatch through `ctx.tools.execute`. The allowlist is the security
- * boundary; an unlisted tool is refused before any call.
+ * Dify tool node.
+ *
+ * Resolution order, and nothing else:
+ *   1. a declarative contract matching `provider/provider_name + tool/tool_name`
+ *   2. an explicit harness-tool passthrough (`DIFY_TOOL_PASSTHROUGH`)
+ *   3. refuse, naming what IS available
+ *
+ * There is deliberately no name-based guessing table: mapping `jina_reader` onto
+ * `web_fetch` calls a different tool than the workflow asked for, which is the
+ * silent-semantic-drift the contract exists to remove.
+ *
+ * `tool_configurations` (user-configured, e.g. API keys) and `tool_parameters`
+ * (per-call inputs) are now both forwarded — previously `tool_configurations`
+ * was dropped and `provider_name` ignored.
  */
 async function executeTool(ctx, spec, request, env) {
+  const provider = String(spec.provider ?? '')
+  const tool = String(spec.toolName ?? '')
+  const requested = provider.length > 0 ? `${provider}/${tool}` : tool
+  const allow = toolAllowSet(env)
+  if (!allow.has('*') && !allow.has(requested) && !allow.has(tool)) {
+    return {
+      ok: false,
+      error: `tool node ${spec.nodeId} refuses "${requested}": allowlist is ${[...allow].join(', ') || '(empty)'}. Set DIFY_TOOL_ALLOW to opt in.`,
+    }
+  }
+  const registry = env.toolRegistry
+  const contract = registry?.get?.(provider, tool)
+  if (contract !== undefined) {
+    const fetchImpl = (() => {
+      const web = typeof ctx.get === 'function' ? ctx.get('web') : undefined
+      if (typeof web?.fetch === 'function') return web.fetch.bind(web)
+      return globalThis.fetch
+    })()
+    const executed = await executeContract(
+      contract,
+      { parameters: spec.arguments ?? {}, configurations: spec.configurations ?? {} },
+      { fetch: fetchImpl, signal: request.signal },
+    )
+    if (!executed.ok) return { ok: false, error: `tool node ${spec.nodeId} "${requested}" ${executed.error}`.replace(`"${requested}" tool `, `"${requested}" `) }
+    return { ok: true, outputs: executed.outputs, meta: { ...executed.meta, requestedTool: requested } }
+  }
+
+  // A Dify plugin package cannot run here: it needs the plugin daemon, which
+  // this harness does not carry. Say so instead of pretending.
+  const pluginShaped = String(spec.providerType ?? '') !== '' && String(spec.providerType ?? '') !== 'builtin' && String(spec.providerType ?? '') !== 'api'
+  if (pluginShaped) {
+    return {
+      ok: false,
+      error:
+        `tool node ${spec.nodeId} "${requested}": Dify plugin packages (.difypkg, provider_type="${spec.providerType}") ` +
+        'require the Dify plugin daemon and are not supported by this runtime. ' +
+        'Reproduce the tool with a declarative YAML contract (see docs/dify-tool-contract.md).',
+    }
+  }
+
+  // Explicit opt-in passthrough to a harness tool, by exact name only.
+  const passthrough = String(env.toolPassthrough ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+  if (passthrough.includes(tool)) {
+    return runHarnessTool(ctx, spec, request, tool)
+  }
+
+  const available = registry?.list?.() ?? []
+  return {
+    ok: false,
+    error:
+      `tool node ${spec.nodeId} "${requested}" is not declared in this deployment. ` +
+      `Declared tools: ${available.length > 0 ? available.join(', ') : '(none)'}. ` +
+      'Add a declarative contract for it, or list an exact harness tool name in DIFY_TOOL_PASSTHROUGH.',
+  }
+}
+
+/** Dispatch to a harness tool by its exact registered name. */
+async function runHarnessTool(ctx, spec, request, mapped) {
   const tools = typeof ctx.get === 'function' ? ctx.get('tools') : undefined
   if (tools === undefined || typeof tools.execute !== 'function') {
     return { ok: false, error: 'ctx.tools is unavailable; refusing to run the tool node' }
-  }
-  const requested = String(spec.toolName ?? '')
-  const mapped = TOOL_ALIASES[requested] ?? requested
-  const allow = toolAllowSet(env)
-  if (!allow.has('*') && !allow.has(mapped)) {
-    return {
-      ok: false,
-      error: `tool node ${spec.nodeId} refuses "${requested}" (mapped to "${mapped}"): allowlist is ${[...allow].join(', ') || '(empty)'}. Set DIFY_TOOL_ALLOW to opt in.`,
-    }
   }
   if (typeof tools.get === 'function' && tools.get(mapped) === undefined) {
     return { ok: false, error: `tool node ${spec.nodeId}: harness tool "${mapped}" is not registered in this profile` }
@@ -1182,17 +1236,13 @@ async function executeTool(ctx, spec, request, env) {
   } catch (error) {
     return { ok: false, error: `tool node ${spec.nodeId} "${mapped}" failed: ${error?.message ?? String(error)}` }
   }
-  if (result.isError) {
-    const text = (result.content ?? [])
-      .filter((block) => block?.type === 'text')
-      .map((block) => block.text)
-      .join('\n')
-    return { ok: false, error: `tool node ${spec.nodeId} "${mapped}" failed: ${text || result.error?.message || 'tool error'}` }
-  }
   const text = (result.content ?? [])
     .filter((block) => block?.type === 'text')
     .map((block) => block.text)
     .join('\n')
+  if (result.isError) {
+    return { ok: false, error: `tool node ${spec.nodeId} "${mapped}" failed: ${text || result.error?.message || 'tool error'}` }
+  }
   const value = result.value
   const outputs = { text, result: text, json: value }
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -1202,9 +1252,20 @@ async function executeTool(ctx, spec, request, env) {
   return {
     ok: true,
     outputs,
-    meta: { tool: mapped, requestedTool: requested, provider: spec.provider ?? '' },
+    meta: { tool: mapped, requestedTool: mapped, provider: spec.provider ?? '', engine: 'harness-tool' },
   }
 }
+
+function toolAllowSet(env) {
+  return new Set(
+    String(env.toolAllow ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0),
+  )
+}
+
+
 
 /** Query terms for lexical retrieval; CJK runs also contribute bigrams. */
 function knowledgeTerms(query) {

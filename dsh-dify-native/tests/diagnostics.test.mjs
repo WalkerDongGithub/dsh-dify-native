@@ -146,7 +146,7 @@ function m_assertId(inspection) {
   const fullySupported = new Set()
   const knownDrops = new Set([
     'retry_config', 'vision', 'context.enabled',
-    'tool_configurations', 'variables', 'var_type', 'agent_strategy_provider_name',
+    'variables', 'var_type', 'agent_strategy_provider_name',
     'retrieval_mode',
     'model.completion_params.top_p',
     'model.completion_params.presence_penalty',
@@ -155,7 +155,7 @@ function m_assertId(inspection) {
   const allowedTopLevel = new Set([...knownDrops].map((field) => field.split('.')[0]))
   const knownFileDrops = {
     'intent-reply.yml': ['context.enabled', 'retrieval_mode', 'model.completion_params.top_p', 'vision'],
-    'lang-consistency.yml': ['tool_configurations', 'model.completion_params.frequency_penalty', 'model.completion_params.presence_penalty', 'model.completion_params.top_p'],
+    'lang-consistency.yml': ['model.completion_params.frequency_penalty', 'model.completion_params.presence_penalty', 'model.completion_params.top_p'],
     'nodes-agent.yml': ['agent_strategy_provider_name'],
     'nodes-datasource.yml': ['variables'],
     'nodes-list-operator.yml': ['var_type'],

@@ -194,8 +194,10 @@ const classifierSpec = (text) => ({
   console.log('ok 2 — http-request: GET via ctx.web.fetch, POST via sandbox+curl, 503 strategies')
 }
 
-// 3. tool: jina_reader maps to web_fetch, outputs expose text/result/json, and
-//    the allowlist refuses anything else before dispatch.
+// 3. tool: dispatch is explicit only. A harness tool is reachable when it is
+//    named exactly AND opted into DIFY_TOOL_PASSTHROUGH; `jina_reader` is never
+//    silently rewritten into a different tool, and the allowlist is checked
+//    against the requested name before any dispatch.
 {
   let calls = 0
   const tools = {
@@ -214,16 +216,29 @@ const classifierSpec = (text) => ({
   const ok = await runSpec(makeCtx({ tools }), {
     kind: 'tool',
     nodeId: 't',
-    toolName: 'jina_reader',
-    provider: 'jina',
+    toolName: 'web_fetch',
+    provider: '',
+    providerType: 'api',
     arguments: { url: 'https://example.test/page' },
-  }, { toolAllow: 'web_fetch' })
+  }, { toolAllow: 'web_fetch', toolPassthrough: 'web_fetch' })
   assert.equal(ok.ok, true)
   assert.equal(ok.outputs.text, 'page body')
   assert.equal(ok.outputs.result, 'page body')
   assert.equal(ok.outputs.statusCode, 200)
   assert.equal(ok.meta.tool, 'web_fetch')
   assert.equal(calls, 1)
+
+  // The old alias table turned this into web_fetch. It must not any more.
+  const unaliased = await runSpec(makeCtx({ tools }), {
+    kind: 'tool',
+    nodeId: 't-unknown',
+    toolName: 'jina_reader',
+    provider: 'jina',
+    arguments: { url: 'https://example.test/page' },
+  }, { toolAllow: 'jina/jina_reader', toolPassthrough: 'web_fetch' })
+  assert.equal(unaliased.ok, false)
+  assert.match(unaliased.error, /is not declared/)
+  assert.equal(calls, 1, 'an undeclared tool must not be substituted or dispatched')
 
   const refused = await runSpec(makeCtx({ tools }), {
     kind: 'tool',
@@ -234,7 +249,7 @@ const classifierSpec = (text) => ({
   assert.equal(refused.ok, false)
   assert.match(refused.error, /refuses "bash"/)
   assert.equal(calls, 1)
-  console.log('ok 3 — tool maps jina_reader→web_fetch and refuses unlisted tools before dispatch')
+  console.log('ok 3 — tool dispatch is explicit only; unknown tools are refused, never aliased')
 }
 
 // 4. knowledge-retrieval: local dataset, deterministic lexical ranking, top_k,
