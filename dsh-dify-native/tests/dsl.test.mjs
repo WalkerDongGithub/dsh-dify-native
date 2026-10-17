@@ -211,4 +211,68 @@ workflow:
   console.log('ok 8 — intent-reply compiles (classifier edges + knowledge + {{#context#}})')
 }
 
+// 9. iteration `flatten_output: true` concatenates per-item arrays into one flat
+//    array; without the flag the per-item values stay nested (Dify's behaviour).
+{
+  const yml = (flatten) => `
+app:
+  name: flatten-probe
+  mode: workflow
+kind: app
+version: 0.1.0
+workflow:
+  graph:
+    nodes:
+      - id: s
+        data:
+          type: start
+          variables:
+            - variable: rows
+              type: array[string]
+              required: true
+      - id: it
+        data:
+          type: iteration
+          iterator_selector: [s, rows]
+          output_selector: [inner, output]
+          output_type: array[array[string]]
+          start_node_id: it-start
+          ${flatten ? 'flatten_output: true' : ''}
+      - id: it-start
+        parentId: it
+        data:
+          type: iteration-start
+      - id: inner
+        parentId: it
+        data:
+          type: template-transform
+          template: '{{#it.item#}}'
+          variables:
+            - variable: it
+              value_selector: [it, item]
+      - id: e
+        data:
+          type: end
+          outputs:
+            - variable: out
+              value_selector: [it, output]
+    edges:
+      - { source: s, target: it }
+      - { source: it-start, target: inner }
+      - { source: it, target: e }
+`
+  const flat = compileGraph(parseDifyDsl(yml(true)))
+  assert.match(flat.script, /\.flat\(\)/, 'flatten_output: true must emit a .flat() over the collected items')
+  const nested = compileGraph(parseDifyDsl(yml(false)))
+  assert.doesNotMatch(nested.script, /\.flat\(\)/, 'without flatten_output the output must stay nested')
+  // The field is consumed, so it must never be reported as a dropped field.
+  const inspection = inspectGraph(parseDifyDsl(yml(true)))
+  assert.equal(
+    (inspection.diagnostics ?? []).filter((row) => row.subject === 'it:flatten_output').length,
+    0,
+    'flatten_output is implemented, so it must not be reported as a dropped field',
+  )
+  console.log('ok 9 — iteration flatten_output flattens only when enabled')
+}
+
 console.log('DSL TESTS OK')

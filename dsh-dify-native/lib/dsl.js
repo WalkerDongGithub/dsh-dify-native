@@ -136,7 +136,7 @@ const CONSUMED_FIELDS = {
   'list-operator': new Set(['variable', 'filter_by', 'order_by', 'limit']),
   datasource: new Set(['provider_name', 'provider_id', 'provider_type', 'datasource_name', 'datasource_label', 'datasource_parameters']),
   'human-input': new Set(['user_actions', 'form_content', 'inputs', 'timeout', 'timeout_unit']),
-  iteration: new Set(['iterator_selector', 'output_selector', 'is_parallel', 'parallel_nums', 'error_handle_mode', 'start_node_id', 'output_type']),
+  iteration: new Set(['iterator_selector', 'output_selector', 'is_parallel', 'parallel_nums', 'error_handle_mode', 'start_node_id', 'output_type', 'flatten_output']),
   loop: new Set(['loop_count', 'loop_count_selector', 'break_conditions', 'logical_operator', 'error_handle_mode', 'start_node_id']),
   'template-transform': new Set(['template', 'variables']),
   assigner: new Set(['items', 'version', 'assigned_variable_selector', 'input_variable_selector', 'write_mode', 'value']),
@@ -1748,7 +1748,15 @@ export function compileGraph(parsed, options = {}) {
       lines.push(`${pad}  }`)
     }
 
-    lines.push(`${pad}  ${variable} = { ok: true, kind: ${JSON.stringify(node.kind)}, title: ${JSON.stringify(node.title)}, outputs: { output: ${outVar}, length: ${outVar}.length } }`)
+    // Dify `flatten_output`: each item may itself yield an array, and the option
+    // asks the container to concatenate them into one flat array. Without the
+    // flag the per-item values stay nested, exactly as Dify leaves them.
+    if (node.kind === 'iteration' && data.flatten_output === true) {
+      lines.push(`${pad}  const ${outVar}F = ${outVar}.flat()`)
+      lines.push(`${pad}  ${variable} = { ok: true, kind: ${JSON.stringify(node.kind)}, title: ${JSON.stringify(node.title)}, outputs: { output: ${outVar}F, length: ${outVar}F.length } }`)
+    } else {
+      lines.push(`${pad}  ${variable} = { ok: true, kind: ${JSON.stringify(node.kind)}, title: ${JSON.stringify(node.title)}, outputs: { output: ${outVar}, length: ${outVar}.length } }`)
+    }
     lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
     lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
     lines.push(`${pad}}`)
