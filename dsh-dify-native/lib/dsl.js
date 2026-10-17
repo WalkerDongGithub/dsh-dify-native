@@ -1079,7 +1079,7 @@ export function compileGraph(parsed, options = {}) {
   // `systemVariables` in index.js); when absent they stay undefined, which the
   // empty-string defaults below absorb.
   lines.push(
-    `__vars.sys = { query: args['sys.query'] ?? args['query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '', conversation_id: args['sys.conversation_id'] ?? '', dialogue_count: args['sys.dialogue_count'] ?? 0, workflow_run_id: args['sys.workflow_run_id'] ?? '', timestamp: args['sys.timestamp'] ?? 0 }`,
+    `__vars.sys = { query: args['sys.query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '', conversation_id: args['sys.conversation_id'] ?? '', dialogue_count: args['sys.dialogue_count'] ?? 0, workflow_run_id: args['sys.workflow_run_id'] ?? '', timestamp: args['sys.timestamp'] ?? 0 }`,
   )
   // `entity` is what Dify calls the item of a list-operator / iteration body in
   // some exports; keep the common ones resolvable.

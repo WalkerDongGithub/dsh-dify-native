@@ -79,4 +79,15 @@ async function renderPrompt(args) {
   console.log('ok 4 — one compiled graph distinguishes the sessions that call it')
 }
 
+// --------------------------------- sys.query is the caller's, never guessed
+
+{
+  // An input that happens to be named `query` is a start variable, not sys.query.
+  const prompt = await renderPrompt({ q: 'hi', query: 'NOT-SYS-QUERY' })
+  assert.equal(prompt, '会话= 第0轮 问:hi', 'sys.query stays empty unless the caller passes it')
+  const script = compileGraph(parseDifyDsl(YML)).script
+  assert.doesNotMatch(script, /args\['query'\]/, "no fallback to a start input named 'query'")
+  console.log("ok 5 — {{#sys.query#}} renders empty when only an input named 'query' is passed")
+}
+
 console.log('SYS VARS TESTS OK')
