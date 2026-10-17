@@ -148,7 +148,7 @@ const CONSUMED_FIELDS = {
   note: new Set(['text']),
   trigger: new Set(['method', 'content_type', 'variables', 'status_code', 'schedule_type', 'cron', 'mode', 'endpoint']),
   'trigger-schedule': new Set(['schedule_type', 'cron', 'mode', 'variables']),
-  'trigger-webhook': new Set(['method', 'content_type', 'variables', 'status_code', 'endpoint']),
+  'trigger-webhook': new Set(['method', 'content_type', 'variables', 'status_code', 'endpoint', 'headers', 'params', 'body']),
   'trigger-plugin': new Set(['provider_name', 'provider_id', 'event', 'variables']),
   generic: new Set(),
 }
@@ -1467,7 +1467,7 @@ export function compileGraph(parsed, options = {}) {
         return `${JSON.stringify(item.name)}: (args[${JSON.stringify(item.name)}] ?? ${JSON.stringify(declaredDefault)})`
       })
       if (kind === 'trigger-schedule') {
-        entries.push(`triggered_at: new Date(0).toISOString()`)
+        entries.push(`triggered_at: (args['trigger.triggered_at'] ?? new Date().toISOString())`)
         entries.push(`mode: ${JSON.stringify(String(data.mode ?? 'visual'))}`)
         entries.push(`frequency: ${JSON.stringify(String(data.frequency ?? ''))}`)
       }
@@ -1482,7 +1482,7 @@ export function compileGraph(parsed, options = {}) {
         entries.push(`datasource: ${JSON.stringify(String(data.datasource_name ?? ''))}`)
       }
       lines.push(`${pad}if (${guard}) {`)
-      lines.push(`${pad}  ${variable} = { ok: true, kind: ${JSON.stringify(kind)}, title: ${JSON.stringify(node.title)}, outputs: {${entries.join(', ')}} }`)
+      lines.push(`${pad}  ${variable} = { ok: true, kind: ${JSON.stringify(kind)}, title: ${JSON.stringify(node.title)}, outputs: {${entries.join(', ')}, ...(args[${JSON.stringify(`__dify_event.${node.id}`)}] ?? {})}, meta: { engine: 'event-input', native_plugin_subscription: false } }`)
       lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
       lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
       lines.push(`${pad}}`)

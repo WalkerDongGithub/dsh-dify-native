@@ -49,7 +49,7 @@ form-demo 的聊天分支使用解析后 DSL 中预置的 conversation 默认值
 | --- | --- | --- |
 | full（所支持字段范围内） | start、end、answer、code、if-else、question-classifier、template-transform、assigner / variable-assigner、variable-aggregator、parameter-extractor、iteration、iteration-start/end、loop、loop-start/end | 本次真实链路覆盖输入、输出、条件分支、代码、聚合、模板、提取及容器执行；未覆盖所有字段组合 |
 | full（有限部署协议） | llm、tool、http-request、list-operator | LLM 文本流；tool 执行部署声明契约或显式允许的 harness 工具；HTTP/列表仅限实现支持的选项。本次覆盖 tool 契约 HTTP，未用独立 http-request 节点证明所有 HTTP 模式 |
-| simplified（实例可能显示 full） | trigger、trigger-schedule、trigger-webhook、trigger-plugin | 将 run args 当事件载荷；不创建调度器、webhook listener 或 Dify 插件订阅。inspect 中 trigger-webhook 为 full 只指载荷注入实现 |
+| 有限扩展协议 | trigger、trigger-webhook、trigger-plugin | 声明式 listener → 真实引擎，鉴权/映射/持久去重；plugin 仅签名桥，原生订阅仍 S。schedule 修复另列 |
 | simplified | knowledge-retrieval | 真实 grep 本地目录 + 词法排序，非 embedding 检索；使用帮助分支实际执行并检查返回记录 |
 | 有限替代策略 | agent | 显式 dsh-bounded-tools 有界工具循环、白名单/schema/取消/usage；旧单轮兼容路径保留；原生插件策略仍 S |
 | 固定提取函数（有限格式） | document-extractor | PDFium 4.30.0、python-docx、pandas/openpyxl；8 种格式与官方纯函数逐字差分，数组/远程字节/失败已验；旧格式仍有 S 子项 |
@@ -111,3 +111,5 @@ TLS 4651731 已复核且真实引擎测试通过：false 单请求 curl --insecu
 #5 agent 基础项已修：`tests/engine-agent-loop.test.mjs` 先复现工具 JSON 被当最终文本，再真实引擎验证一次 HTTP 工具与回灌、未声明/schema/duplicate/limit/cancel；旧单轮断言未改。完整协议及 S 子项见 [agent-strategy.md](agent-strategy.md)。
 
 conversation 回归先真实失败（第二次仍为1），修复后 engine-conversation.test.mjs 通过。状态键为 session.id + 工作流绝对路径，默认工作区 `.dify-native-state` 或 DIFY_STATE_DIR；写临时文件 fsync 后原子 rename，锁冲突明确失败，绝不自动清理旧锁或重放。成功运行提交变量，失败不提交；未验证失败节点前已写变量与官方事务边界等价，仍为 S 子项。
+
+#6（trigger/trigger-webhook）与 #9（trigger-plugin）基础桥已修，真实 engine-events.test.mjs 通过；源码固定新版 5dff246，完整部署/诊断边界见 [event-deployment.md](event-deployment.md)。原生插件订阅、公网、multipart/文件生命周期仍 S 子项，未宣称7组全兼容。

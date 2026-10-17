@@ -410,7 +410,7 @@ cd dsh-dify-native
 
 - **不支持非交互暂停**。`human-input` 是确定性解析的，不会真的等人。
 - **没有向量检索**。`knowledge-retrieval` 是词法匹配，`knowledge-index` 是空操作。
-- **触发节点只是入口**。`trigger*` 可以作为图的起始节点被解析和编译，但这个包
+- **触发协议有限**。`trigger*` 支持显式参数注入及 [声明式事件桥](docs/event-deployment.md)；原生插件订阅仍未实现。历史上这个包
   不监听 webhook、不跑 cron、不订阅事件——什么时候跑由调用方决定。
 - **没有 PDF / Office 解析**。
 - **单轮，无 chat 状态机**。`answer` 节点会累积到 `answers`，多轮对话语义由

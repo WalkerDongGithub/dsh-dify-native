@@ -19,6 +19,7 @@ import { stateRoot, stateKey, readState, writeState, lockState } from './runtime
 import { fileURLToPath } from 'node:url'
 import { compileGraph, inspectGraph, parseDifyDsl } from './dsl.js'
 import { createDifyNodeProvider, defaultPythonPath } from './provider.js'
+import { startEventRuntime } from './event-runtime.js'
 import { deriveChatHistory } from './session-history.js'
 
 const name = 'dsh-dify-native'
@@ -483,6 +484,16 @@ function createRunTool(ctx) {
   }
 }
 
+function createEventTool(ctx) {
+  return { name: 'dify_native_events', output: { schema: { type: 'object', additionalProperties: true }, render: (_args,value) => [{ type: 'text', text: JSON.stringify(value) }] }, description: 'Start an explicitly configured local event listener until this context is disposed', parameters: { type: 'object', properties: { configPath: { type: 'string' } }, required: ['configPath'] },
+    async execute(args, exec) {
+      const config = JSON.parse(await readFile(args.configPath, 'utf8'))
+      const runtime = await startEventRuntime(ctx, config, exec?.agent)
+      ctx.effect(() => () => runtime.close(), 'dify-native.event-listener')
+      return { url: runtime.url, native_plugin_subscription: false }
+    }
+  }
+}
 function apply(ctx) {
   ctx.inject(['subagents'], (childCtx) => {
     const subagents = childCtx.subagents
@@ -502,6 +513,7 @@ function apply(ctx) {
       ctx.tools.register(createServicesTool(ctx)),
       ctx.tools.register(createSandboxProbeTool(ctx)),
       ctx.tools.register(createRunTool(ctx)),
+      ctx.tools.register(createEventTool(ctx)),
     ]
     return () => {
       for (const dispose of disposers) dispose?.()
