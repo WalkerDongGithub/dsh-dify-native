@@ -43,10 +43,20 @@ cd dsh-dify-runtime && python3 tests/test_runtime.py
 
 ## 维护
 
-本机认证走 HTTP token（SSH 在 Gitea 侧 `DISABLE_SSH = true`），凭据存在
-`~/.git-credentials`，clone/push 直接用：
+Gitea 实例监听 `127.0.0.1:8443`（`ROOT_URL` 配的是
+`http://116.204.96.133:8443/`，SSH 已 `DISABLE_SSH = true`，`REQUIRE_SIGNIN_VIEW = true`，
+所以网页和 clone 都需要登录/凭据）。walker 的 HTTP token 存在 `~/.git-credentials`，
+clone/push 直接走：
 
 ```bash
 git clone http://127.0.0.1:8443/walker/dsh-dify-runtime.git
 git push origin main
+```
+
+现有 token 只有 `write:repository` 权限，够 push；要建新仓库（`POST /user/repos`
+需要 `write:user`）时，用服务器上的 gitea CLI 临时生成全权限 token：
+
+```bash
+/home/walker/.local/bin/gitea -w /home/walker/gitea -c /home/walker/gitea/app.ini \
+  admin user generate-access-token -u walker -t <名字> --scopes all --raw
 ```
