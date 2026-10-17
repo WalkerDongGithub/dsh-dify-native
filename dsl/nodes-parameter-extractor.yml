@@ -1,0 +1,41 @@
+app:
+  name: nodes-parameter-extractor
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: s
+        type: custom
+        data:
+          type: start
+          title: 开始
+          variables:
+            - { variable: text, label: 文本, type: paragraph, required: true }
+      - id: pe
+        type: custom
+        data:
+          type: parameter-extractor
+          title: 提取参数
+          query: [s, text]
+          reasoning_mode: prompt
+          instruction: "从文本中提取联系人姓名和城市。只输出 JSON。"
+          model:
+            provider: zai
+            name: glm-4.5-air
+            mode: chat
+            completion_params: { temperature: 0.1 }
+          parameters:
+            - { name: name, type: string, description: 联系人姓名, required: true }
+            - { name: city, type: string, description: 城市, required: false }
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: name, value_selector: [pe, name] }
+            - { variable: city, value_selector: [pe, city] }
+            - { variable: success, value_selector: [pe, __is_success] }
+    edges:
+      - { source: s, target: pe, sourceHandle: source }
+      - { source: pe, target: e, sourceHandle: source }

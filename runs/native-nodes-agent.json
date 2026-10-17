@@ -1,0 +1,25 @@
+{
+  "status": "failed",
+  "stopReason": "error",
+  "error": "workflow execution failed (abort): runtime disposed",
+  "appName": "nodes-agent",
+  "outputs": {},
+  "answers": [],
+  "nodes": {},
+  "usage": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "totalTokens": 0
+  },
+  "agentsStarted": 1,
+  "events": [
+    {
+      "at": "start",
+      "label": "agent:研究助手",
+      "phase": "dify:nodes-agent",
+      "seq": 1
+    }
+  ],
+  "script": "phase(\"dify:nodes-agent\")\nconst __nodes = {}\nconst __ran = {}\nconst __branch = {}\nconst __answers = []\nconst __text = (v) => v === undefined || v === null ? \"\" : Array.isArray(v) ? v.map((x) => x !== null && typeof x === \"object\" ? (x.content ?? JSON.stringify(x)) : String(x)).join(\"\\n\") : typeof v === \"object\" ? JSON.stringify(v) : String(v)\nconst __empty = (v) => v === undefined || v === null || v === \"\" || (Array.isArray(v) && v.length === 0) || (typeof v === \"object\" && !Array.isArray(v) && Object.keys(v).length === 0)\nconst __num = (v) => { if (typeof v === \"boolean\" || v === null || v === undefined || v === \"\") return undefined; const n = typeof v === \"number\" ? v : Number(String(v).trim()); return Number.isFinite(n) ? n : undefined }\nconst __cmp = (left, op, right, varType) => {\n  op = String(op ?? '=').trim()\n  if (op === 'empty') return __empty(left)\n  if (op === 'not empty') return !__empty(left)\n  if (op === 'null') return left === undefined || left === null\n  if (op === 'not null') return left !== undefined && left !== null\n  const a = __num(left)\n  const b = __num(right)\n  if (a !== undefined && b !== undefined) {\n    if (op === '=' || op === '==' || op === 'is') return a === b\n    if (op === '≠' || op === '!=' || op === 'is not') return a !== b\n    if (op === '>') return a > b\n    if (op === '<') return a < b\n    if (op === '≥' || op === '>=') return a >= b\n    if (op === '≤' || op === '<=') return a <= b\n  }\n  const ls = __text(left)\n  const rs = __text(right)\n  if (op === '=' || op === '==' || op === 'is') return ls === rs\n  if (op === '≠' || op === '!=' || op === 'is not') return ls !== rs\n  if (op === 'contains') return ls.includes(rs)\n  if (op === 'not contains') return !ls.includes(rs)\n  if (op === 'start with') return ls.startsWith(rs)\n  if (op === 'end with') return ls.endsWith(rs)\n  if (op === 'in') return (Array.isArray(right) ? right : [right]).map(__text).includes(ls)\n  if (op === 'not in') return !(Array.isArray(right) ? right : [right]).map(__text).includes(ls)\n  return false\n}\nconst __vars = {\"conversation\":{},\"environment\":{}}\n__vars.sys = { query: args['sys.query'] ?? args['query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '' }\nlet __r0\n__ran[\"s\"] = true\nif ((__ran[\"s\"] === true)) {\n  const __in0 = {}\n  const __req0 = {\"kind\":\"agent\",\"nodeId\":\"agent\",\"title\":\"研究助手\",\"timeoutMs\":120000,\"inputs\":{},\"provider\":\"zai\",\"model\":\"glm-4.5-air\",\"temperature\":0.2,\"strategy\":\"function_calling\",\"strategyLabel\":\"FunctionCalling\",\"agentVersion\":\"1\",\"instruction\":\"\",\"query\":\"\",\"tools\":[],\"toolsPolicy\":{\"requested\":[],\"mode\":\"parsed, no tool loop in single-turn execution\"},\"outputSchema\":null,\"declaredOutputs\":[]}\n  __req0.inputs = __in0\n  __req0.instruction = (\"你是研究助手。用三句话回答，不要使用工具。\")\n  __req0.query = (__text(args[\"task\"]))\n  const __raw0 = await agent(JSON.stringify(__req0), { label: \"agent:研究助手\" })\n  if (__raw0 === null) throw new Error('dify node agent (agent:研究助手) failed: no result from provider')\n  __r0 = JSON.parse(__raw0)\n  if (!__r0.ok) throw new Error('dify node agent (agent:研究助手) failed: ' + (__r0.error ?? 'unknown error'))\n  __nodes[\"agent\"] = __r0\n  __ran[\"agent\"] = true\n}\nconst __outputs = {\"answer\": (__r0?.outputs[\"text\"] === undefined ? null : __r0?.outputs[\"text\"])}\nconst __answer = __answers.length > 0 ? __answers.join('\\n\\n') : ''\nif (__answers.length > 0 && __outputs.answer === undefined) __outputs.answer = __answer\nreturn { nodes: __nodes, outputs: __outputs, answers: __answers }",
+  "durationMs": 3018
+}

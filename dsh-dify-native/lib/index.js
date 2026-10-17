@@ -80,12 +80,19 @@ function renderRun(_args, value) {
   const lines = [
     `dify-native ${value.status}${value.stopReason ? ` (${value.stopReason})` : ''}${value.error ? `: ${value.error}` : ''}`,
     `outputs: ${JSON.stringify(value.outputs ?? {})}`,
+    ...((value.answers ?? []).length > 0 ? [`answers: ${JSON.stringify(value.answers)}`] : []),
     ...Object.entries(value.nodes ?? {}).map(
       ([id, node]) => {
         const type = node.kind ?? (node.backendArgv0 ? 'code' : 'node')
         const route = node.meta?.provider ? ` route=${node.meta.provider}/${node.meta.model}` : ''
-        const branch = typeof node.outputs?.result === 'string' ? ` branch=${node.outputs.result}` : ''
-        return `- ${id} ${type} ${node.title ?? ''}: ${node.ok === false ? 'failed' : 'ok'}${route}${branch}${node.enforcement ? ` [${node.enforcement}]` : ''}${node.ok === false ? ` — ${node.error}` : ''}`
+        const branch =
+          node.branch ??
+          (typeof node.outputs?.result === 'string'
+            ? node.outputs.result
+            : typeof node.outputs?.class_id === 'string'
+              ? `class=${node.outputs.class_id}`
+              : '')
+        return `- ${id} ${type} ${node.title ?? ''}: ${node.ok === false ? 'failed' : 'ok'}${route}${branch ? ` branch=${branch}` : ''}${node.enforcement ? ` [${node.enforcement}]` : ''}${node.ok === false ? ` — ${node.error}` : ''}`
       },
     ),
     `usage: ${JSON.stringify(value.usage ?? {})}, agentsStarted=${value.agentsStarted ?? 0}, durationMs=${value.durationMs ?? '?'}`,
@@ -143,11 +150,18 @@ function createServicesTool(ctx) {
       const sandbox = ctx.get('sandbox')
       const subagents = ctx.get('subagents')
       const llm = ctx.get('llm')
+      const web = ctx.get('web')
       let providers = []
       try {
         providers = [...(subagents?.providers?.keys?.() ?? [])]
       } catch {
         providers = []
+      }
+      let harnessTools = []
+      try {
+        harnessTools = (ctx.get('tools')?.schemas?.() ?? []).map((tool) => tool.name)
+      } catch {
+        harnessTools = []
       }
       let llmProviders = []
       let llmModels = {}
@@ -176,6 +190,11 @@ function createServicesTool(ctx) {
         llmStream: typeof llm?.stream,
         llmProviders,
         llmModels,
+        web: web === undefined ? null : web.constructor?.name ?? 'unknown',
+        webFetch: typeof web?.fetch,
+        harnessTools,
+        knowledgeRoot: process.env.DIFY_KNOWLEDGE_ROOT ?? '',
+        toolAllow: process.env.DIFY_TOOL_ALLOW ?? 'web_search,web_fetch',
         defaultModel: defaultModel ?? null,
         node: process.version,
       }
@@ -256,7 +275,7 @@ function createRunTool(ctx) {
   return {
     name: 'dify_native_run',
     description:
-      'Compile a real Dify workflow .yml into an orchestration script and run it on the harness workflow engine. LLM nodes call ctx.llm, code nodes execute under ctx.sandbox.confine (landlock/bwrap), if-else/variable-aggregator/template-transform compile to plain script logic. Supports acyclic start → … → end graphs.',
+      'Compile a real Dify workflow .yml into an orchestration script and run it on the harness workflow engine. LLM and question-classifier nodes call ctx.llm, code nodes execute under ctx.sandbox.confine, http-request uses ctx.web.fetch (plain GET) or ctx.sandbox.confine + curl, tool nodes dispatch through ctx.tools, knowledge-retrieval searches a local dataset with ctx.tools grep, and if-else/assigner/answer/aggregator/template-transform compile to plain script logic. Supports acyclic start → … → end/answer graphs.',
     timeoutMs: 300_000,
     parameters: RUN_PARAM,
     output: { schema: { type: 'object', additionalProperties: true }, render: renderRun },
@@ -315,6 +334,7 @@ function createRunTool(ctx) {
           error: result.error ?? '',
           appName: parsed.appName,
           outputs: ok ? (value.outputs ?? {}) : {},
+          answers: ok ? (value.answers ?? []) : [],
           nodes,
           usage: (() => {
             const total = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }

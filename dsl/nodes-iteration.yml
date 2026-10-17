@@ -1,0 +1,54 @@
+app:
+  name: nodes-iteration
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: s
+        type: custom
+        data:
+          type: start
+          title: 开始
+          variables:
+            - { variable: items, label: 列表, type: "array[string]", required: true }
+      - id: iter
+        type: custom
+        data:
+          type: iteration
+          title: 逐项处理
+          iterator_selector: [s, items]
+          output_selector: [tpl, output]
+          output_type: "array[string]"
+          is_parallel: true
+          parallel_nums: 4
+          error_handle_mode: continue-on-error
+          start_node_id: iter-start
+      - id: iter-start
+        type: custom
+        parentId: iter
+        data:
+          type: iteration-start
+          title: 迭代开始
+          isInIteration: true
+          iteration_id: iter
+      - id: tpl
+        type: custom
+        parentId: iter
+        data:
+          type: template-transform
+          title: 处理单项
+          isInIteration: true
+          iteration_id: iter
+          template: "第{{#iter-start.index#}}项: {{#iter-start.item#}}"
+          variables: []
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: result, value_selector: [iter, output] }
+    edges:
+      - { source: s, target: iter, sourceHandle: source }
+      - { source: iter, target: e, sourceHandle: source }
+      - { source: iter-start, target: tpl, sourceHandle: source }

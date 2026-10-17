@@ -1,0 +1,38 @@
+app:
+  name: nodes-datasource
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: ds
+        type: custom
+        data:
+          type: datasource
+          title: 本地数据源
+          provider_id: local/file
+          provider_name: local/file
+          provider_type: builtin
+          datasource_name: records
+          datasource_parameters:
+            path:
+              type: constant
+              value: "records.jsonl"
+          variables:
+            - { variable: record, label: 一条记录 }
+      - id: tpl
+        type: custom
+        data:
+          type: template-transform
+          title: 格式化
+          template: "数据源={{#ds.datasource#}} 记录={{#ds.record#}}"
+          variables: []
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: result, value_selector: [tpl, output] }
+    edges:
+      - { source: ds, target: tpl, sourceHandle: source }
+      - { source: tpl, target: e, sourceHandle: source }

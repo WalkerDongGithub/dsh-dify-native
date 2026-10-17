@@ -1,0 +1,33 @@
+app:
+  name: nodes-trigger
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: trig
+        type: custom
+        data:
+          type: trigger-webhook
+          title: Webhook 触发
+          method: POST
+          content_type: application/json
+          variables:
+            - { variable: topic, label: 主题 }
+          status_code: 200
+      - id: tpl
+        type: custom
+        data:
+          type: template-transform
+          title: 组装
+          template: "触发主题: {{#trig.topic#}}"
+          variables: []
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: result, value_selector: [tpl, output] }
+    edges:
+      - { source: trig, target: tpl, sourceHandle: source }
+      - { source: tpl, target: e, sourceHandle: source }

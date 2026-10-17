@@ -1,0 +1,51 @@
+app:
+  name: nodes-code-languages
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: s
+        type: custom
+        data:
+          type: start
+          title: 开始
+          variables:
+            - { variable: n, label: 数字, type: number, required: true }
+      - id: js
+        type: custom
+        data:
+          type: code
+          title: JS 加倍
+          code_language: javascript
+          code: |
+            function main({ n }) {
+              return { doubled: Number(n) * 2 }
+            }
+          variables:
+            - { variable: n, value_selector: [s, n] }
+          outputs:
+            doubled: { type: number }
+      - id: py
+        type: custom
+        data:
+          type: code
+          title: Python 加一
+          code_language: python3
+          code: |
+            def main(doubled):
+                return {"result": doubled + 1}
+          variables:
+            - { variable: doubled, value_selector: [js, doubled] }
+          outputs:
+            result: { type: number }
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: result, value_selector: [py, result] }
+    edges:
+      - { source: s, target: js, sourceHandle: source }
+      - { source: js, target: py, sourceHandle: source }
+      - { source: py, target: e, sourceHandle: source }

@@ -1,0 +1,107 @@
+{
+  "status": "succeeded",
+  "stopReason": "completed",
+  "error": "",
+  "appName": "Form表单聊天Demo",
+  "outputs": {
+    "answer": "登录成功，我们聊点什么？"
+  },
+  "answers": [
+    "登录成功，我们聊点什么？"
+  ],
+  "nodes": {
+    "1731378918101": {
+      "ok": true,
+      "outputs": {
+        "result": "true"
+      },
+      "kind": "if-else",
+      "title": "user_token",
+      "durationMs": 0
+    },
+    "1731378644337": {
+      "ok": true,
+      "outputs": {
+        "is_login": 1,
+        "user_token": "user_token_test"
+      },
+      "exitCode": 0,
+      "enforcement": "partial",
+      "backendArgv0": "/home/walker/node/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run",
+      "stderr": "landlock-run: partial enforcement (older Landlock ABI)\n",
+      "kind": "code",
+      "title": "登录",
+      "durationMs": 305
+    },
+    "1731379291700": {
+      "ok": true,
+      "outputs": {
+        "result": "true"
+      },
+      "kind": "if-else",
+      "title": "是否登录成功",
+      "durationMs": 0
+    },
+    "1731379076735": {
+      "ok": true,
+      "kind": "assigner",
+      "title": "变量赋值",
+      "outputs": {}
+    },
+    "1731379313752": {
+      "ok": true,
+      "kind": "answer",
+      "title": "直接回复 3",
+      "outputs": {
+        "answer": "登录成功，我们聊点什么？",
+        "text": "登录成功，我们聊点什么？"
+      }
+    }
+  },
+  "usage": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "totalTokens": 0
+  },
+  "agentsStarted": 3,
+  "events": [
+    {
+      "at": "start",
+      "label": "if-else:user_token",
+      "phase": "dify:Form表单聊天Demo",
+      "seq": 1
+    },
+    {
+      "at": "end",
+      "label": "if-else:user_token",
+      "outcome": "completed",
+      "seq": 1
+    },
+    {
+      "at": "start",
+      "label": "code:登录",
+      "phase": "dify:Form表单聊天Demo",
+      "seq": 2
+    },
+    {
+      "at": "end",
+      "label": "code:登录",
+      "outcome": "completed",
+      "seq": 2
+    },
+    {
+      "at": "start",
+      "label": "if-else:是否登录成功",
+      "phase": "dify:Form表单聊天Demo",
+      "seq": 3
+    },
+    {
+      "at": "end",
+      "label": "if-else:是否登录成功",
+      "outcome": "completed",
+      "seq": 3
+    }
+  ],
+  "script": "phase(\"dify:Form表单聊天Demo\")\nconst __nodes = {}\nconst __ran = {}\nconst __branch = {}\nconst __answers = []\nconst __text = (v) => v === undefined || v === null ? \"\" : Array.isArray(v) ? v.map((x) => x !== null && typeof x === \"object\" ? (x.content ?? JSON.stringify(x)) : String(x)).join(\"\\n\") : typeof v === \"object\" ? JSON.stringify(v) : String(v)\nconst __vars = {\"conversation\":{\"user_token\":\"\"},\"environment\":{\"login\":0}}\n__vars.sys = { query: args['sys.query'] ?? args['query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '' }\nlet __r0, __r1, __r2, __r3, __r4, __r5, __r6, __r7, __r8\n__ran[\"1729841263487\"] = true\nif ((__ran[\"1729841263487\"] === true)) {\n  const __in0 = {\"conversation.user_token\": __vars[\"conversation\"][\"user_token\"]}\n  const __req0 = {\"kind\":\"if-else\",\"nodeId\":\"1731378918101\",\"title\":\"user_token\",\"timeoutMs\":120000,\"inputs\":{},\"cases\":[{\"case_id\":\"true\",\"logical_operator\":\"and\",\"conditions\":[{\"comparison_operator\":\"empty\",\"value\":\"\",\"varType\":\"string\",\"variable_selector\":[\"conversation\",\"user_token\"]}]}],\"logical_operator\":\"and\"}\n  __req0.inputs = __in0\n  const __raw0 = await agent(JSON.stringify(__req0), { label: \"if-else:user_token\" })\n  if (__raw0 === null) throw new Error('dify node 1731378918101 (if-else:user_token) failed: no result from provider')\n  __r0 = JSON.parse(__raw0)\n  if (!__r0.ok) throw new Error('dify node 1731378918101 (if-else:user_token) failed: ' + (__r0.error ?? 'unknown error'))\n  __nodes[\"1731378918101\"] = __r0\n  __branch[\"1731378918101\"] = String(__r0.outputs.result)\n  __ran[\"1731378918101\"] = true\n}\nif ((__ran[\"1731378918101\"] === true && __branch[\"1731378918101\"] === \"false\")) {\n  const __in1 = {}\n  const __req1 = {\"kind\":\"llm\",\"nodeId\":\"1731378486318\",\"title\":\"LLM\",\"timeoutMs\":120000,\"inputs\":{},\"provider\":\"openai_api_compatible\",\"model\":\"gpt-4o-mini\",\"temperature\":0.7,\"prompt\":[{\"role\":\"system\",\"text\":\"\"},{\"role\":\"user\",\"text\":\"\"}]}\n  __req1.inputs = __in1\n  __req1.prompt[0].text = (\"你是个聊天机器人\")\n  __req1.prompt[1].text = (__text(__vars[\"sys\"][\"query\"]))\n  const __raw1 = await agent(JSON.stringify(__req1), { label: \"llm:LLM\" })\n  if (__raw1 === null) throw new Error('dify node 1731378486318 (llm:LLM) failed: no result from provider')\n  __r1 = JSON.parse(__raw1)\n  if (!__r1.ok) throw new Error('dify node 1731378486318 (llm:LLM) failed: ' + (__r1.error ?? 'unknown error'))\n  __nodes[\"1731378486318\"] = __r1\n  __ran[\"1731378486318\"] = true\n}\nif ((__ran[\"1731378486318\"] === true)) {\n  const __a = (__text(__r1?.outputs[\"text\"]))\n  __r2 = { ok: true, kind: 'answer', title: \"直接回复 2\", outputs: { answer: __a, text: __a } }\n  __nodes[\"1731378500668\"] = __r2\n  __answers.push(__a)\n  __ran[\"1731378500668\"] = true\n}\nif ((__ran[\"1731378918101\"] === true && __branch[\"1731378918101\"] === \"true\")) {\n  const __in2 = {\"input_string\": __vars[\"sys\"][\"query\"]}\n  const __req2 = {\"kind\":\"code\",\"nodeId\":\"1731378644337\",\"title\":\"登录\",\"timeoutMs\":120000,\"inputs\":{},\"codeLanguage\":\"python3\",\"code\":\"import json,requests\\n\\ndef main(input_string):\\n    try:\\n        data = json.loads(input_string)\\n        username = data['username']\\n        password = data['password']\\n        #这里可以验证是否登录成功，返回user_token和status，假设username=svcvit为登录成功\\n        #response_data = requests.post(\\\"\\\")\\n        if username == \\\"svcvit\\\":\\n            return {\\\"is_login\\\":1,\\\"user_token\\\":\\\"user_token_test\\\"}\\n        else:\\n            return {\\\"is_login\\\":0,\\\"user_token\\\":\\\"\\\"}\\n    except:\\n        return {\\\"is_login\\\":0,\\\"user_token\\\":\\\"\\\"}\\n\"}\n  __req2.inputs = __in2\n  const __raw2 = await agent(JSON.stringify(__req2), { label: \"code:登录\" })\n  if (__raw2 === null) throw new Error('dify node 1731378644337 (code:登录) failed: no result from provider')\n  __r3 = JSON.parse(__raw2)\n  if (!__r3.ok) throw new Error('dify node 1731378644337 (code:登录) failed: ' + (__r3.error ?? 'unknown error'))\n  __nodes[\"1731378644337\"] = __r3\n  __ran[\"1731378644337\"] = true\n}\nif ((__ran[\"1731378644337\"] === true)) {\n  const __in3 = {\"1731378644337.is_login\": __r3?.outputs[\"is_login\"]}\n  const __req3 = {\"kind\":\"if-else\",\"nodeId\":\"1731379291700\",\"title\":\"是否登录成功\",\"timeoutMs\":120000,\"inputs\":{},\"cases\":[{\"case_id\":\"true\",\"logical_operator\":\"and\",\"conditions\":[{\"comparison_operator\":\"=\",\"value\":\"1\",\"varType\":\"number\",\"variable_selector\":[\"1731378644337\",\"is_login\"]}]}],\"logical_operator\":\"and\"}\n  __req3.inputs = __in3\n  const __raw3 = await agent(JSON.stringify(__req3), { label: \"if-else:是否登录成功\" })\n  if (__raw3 === null) throw new Error('dify node 1731379291700 (if-else:是否登录成功) failed: no result from provider')\n  __r4 = JSON.parse(__raw3)\n  if (!__r4.ok) throw new Error('dify node 1731379291700 (if-else:是否登录成功) failed: ' + (__r4.error ?? 'unknown error'))\n  __nodes[\"1731379291700\"] = __r4\n  __branch[\"1731379291700\"] = String(__r4.outputs.result)\n  __ran[\"1731379291700\"] = true\n}\nif ((__ran[\"1731379291700\"] === true && __branch[\"1731379291700\"] === \"false\")) {\n  __r5 = { ok: true, kind: 'template-transform', title: \"登录表单\", outputs: { output: (\"<form data-format=\\\"json\\\">\\n  <label for=\\\"username\\\">Username:</label>\\n  <input type=\\\"text\\\" name=\\\"username\\\" />\\n  <label for=\\\"password\\\">Password:</label>\\n  <input type=\\\"password\\\" name=\\\"password\\\" />\\n  <button data-size=\\\"small\\\" data-variant=\\\"primary\\\">Login</button>\\n</form>\") } }\n  __nodes[\"1730163641212\"] = __r5\n  __ran[\"1730163641212\"] = true\n}\nif ((__ran[\"1730163641212\"] === true)) {\n  const __a = (\"初次使用，请登录员工账号和密码哦。\\n\\n\" + __text(__r5?.outputs[\"output\"]))\n  __r6 = { ok: true, kind: 'answer', title: \"直接回复 2\", outputs: { answer: __a, text: __a } }\n  __nodes[\"1731378296917\"] = __r6\n  __answers.push(__a)\n  __ran[\"1731378296917\"] = true\n}\nif ((__ran[\"1731379291700\"] === true && __branch[\"1731379291700\"] === \"true\")) {\n  {\n    const __v = __r3?.outputs[\"user_token\"]\n    const __h = __vars[\"conversation\"]\n    if (__h === undefined || __h === null) throw new Error('assigner 1731379076735 target conversation.user_token is not writable')\n    __h[\"user_token\"] = __v\n  }\n  __r7 = { ok: true, kind: 'assigner', title: \"变量赋值\", outputs: {} }\n  __nodes[\"1731379076735\"] = __r7\n  __ran[\"1731379076735\"] = true\n}\nif ((__ran[\"1731379076735\"] === true)) {\n  const __a = (\"登录成功，我们聊点什么？\")\n  __r8 = { ok: true, kind: 'answer', title: \"直接回复 3\", outputs: { answer: __a, text: __a } }\n  __nodes[\"1731379313752\"] = __r8\n  __answers.push(__a)\n  __ran[\"1731379313752\"] = true\n}\nconst __outputs = {}\nconst __answer = __answers.length > 0 ? __answers.join('\\n\\n') : ''\nif (__answers.length > 0 && __outputs.answer === undefined) __outputs.answer = __answer\nreturn { nodes: __nodes, outputs: __outputs, answers: __answers }",
+  "durationMs": 741
+}

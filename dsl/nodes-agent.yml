@@ -1,0 +1,49 @@
+app:
+  name: nodes-agent
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: s
+        type: custom
+        data:
+          type: start
+          title: 开始
+          variables:
+            - { variable: task, label: 任务, type: paragraph, required: true }
+      - id: agent
+        type: custom
+        data:
+          type: agent
+          title: 研究助手
+          agent_strategy_provider_name: langgenius/agent/agent
+          agent_strategy_name: function_calling
+          agent_strategy_label: FunctionCalling
+          agent_parameters:
+            model:
+              type: constant
+              value:
+                provider: zai
+                name: glm-4.5-air
+                mode: chat
+                completion_params: { temperature: 0.2 }
+            query:
+              type: constant
+              value: "{{#s.task#}}"
+            instruction:
+              type: constant
+              value: "你是研究助手。用三句话回答，不要使用工具。"
+            tools:
+              type: constant
+              value: []
+          output_schema: null
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: answer, value_selector: [agent, text] }
+    edges:
+      - { source: s, target: agent, sourceHandle: source }
+      - { source: agent, target: e, sourceHandle: source }

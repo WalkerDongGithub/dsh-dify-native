@@ -1,0 +1,193 @@
+{
+  "status": "succeeded",
+  "stopReason": "completed",
+  "error": "",
+  "appName": "mature-ticket-triage",
+  "outputs": {
+    "reply": "建议：\n关键词：\n· 退款\n· 蓝牙连接\n· 腕带",
+    "advice": "",
+    "keywords": [
+      "退款",
+      "蓝牙连接",
+      "腕带"
+    ]
+  },
+  "answers": [],
+  "nodes": {
+    "pe": {
+      "ok": true,
+      "outputs": {
+        "priority": "high",
+        "keywords": [
+          "退款",
+          "蓝牙连接",
+          "腕带"
+        ],
+        "__is_success": 1,
+        "__reason": "ok"
+      },
+      "meta": {
+        "provider": "zai",
+        "model": "glm-4.5-air",
+        "routeSource": "dsl",
+        "reasoningMode": "prompt",
+        "parameters": [
+          "priority",
+          "keywords"
+        ],
+        "missing": [],
+        "finish": "stop",
+        "textChars": 72,
+        "reasoningChars": 682,
+        "parsedFrom": "text"
+      },
+      "kind": "parameter-extractor",
+      "title": "提取工单参数",
+      "durationMs": 3863
+    },
+    "br": {
+      "ok": true,
+      "outputs": {
+        "result": "true"
+      },
+      "kind": "if-else",
+      "title": "是否高优先级",
+      "durationMs": 0
+    },
+    "high": {
+      "ok": true,
+      "outputs": {
+        "text": "",
+        "usage": {
+          "inputTokens": 58,
+          "outputTokens": 120,
+          "totalTokens": 183,
+          "cacheReadTokens": 5
+        },
+        "reasoning_content": "\n我需要为这个高优先级工单提供一句中文处理建议，不超过40字，需要基于客户提供的信息：\n- 客户运动腕带无法连接App\n- 已重启三次无效\n- 客户明天要出差\n- 客户今天要求退款\n- 关键词：退款、蓝牙连接、腕带\n\n作为客服主管，我需要给出一个可执行的处理建议，既要考虑客户紧急需求，也要合理解决问题。\n\n可能的处理方向：\n1. 立即退款方案\n2. 快速解决连接问题\n3. 先退款"
+      },
+      "meta": {
+        "provider": "zai",
+        "model": "glm-4.5-air",
+        "requested": "zai/glm-4.5-air",
+        "routeSource": "dsl",
+        "finish": "max-tokens"
+      },
+      "kind": "llm",
+      "title": "高优先级建议",
+      "durationMs": 3097
+    },
+    "agg": {
+      "ok": true,
+      "kind": "variable-aggregator",
+      "title": "合并建议",
+      "outputs": {
+        "output": ""
+      }
+    },
+    "split": {
+      "ok": true,
+      "outputs": {
+        "items": [
+          "退款",
+          "蓝牙连接",
+          "腕带"
+        ]
+      },
+      "exitCode": 0,
+      "enforcement": "partial",
+      "backendArgv0": "/home/walker/node/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run",
+      "stderr": "landlock-run: partial enforcement (older Landlock ABI)\n",
+      "kind": "code",
+      "title": "关键词拆解",
+      "durationMs": 47
+    },
+    "inner": {
+      "ok": true,
+      "kind": "template-transform",
+      "title": "关键词项",
+      "outputs": {
+        "output": "· 腕带"
+      }
+    },
+    "iter": {
+      "ok": true,
+      "kind": "iteration",
+      "title": "逐关键词跟进",
+      "outputs": {
+        "output": [
+          "· 退款",
+          "· 蓝牙连接",
+          "· 腕带"
+        ],
+        "length": 3
+      }
+    },
+    "final": {
+      "ok": true,
+      "kind": "template-transform",
+      "title": "汇总回复",
+      "outputs": {
+        "output": "建议：\n关键词：\n· 退款\n· 蓝牙连接\n· 腕带"
+      }
+    }
+  },
+  "usage": {
+    "inputTokens": 58,
+    "outputTokens": 120,
+    "totalTokens": 183
+  },
+  "agentsStarted": 4,
+  "events": [
+    {
+      "at": "start",
+      "label": "parameter-extractor:提取工单参数",
+      "phase": "dify:mature-ticket-triage",
+      "seq": 1
+    },
+    {
+      "at": "end",
+      "label": "parameter-extractor:提取工单参数",
+      "outcome": "completed",
+      "seq": 1
+    },
+    {
+      "at": "start",
+      "label": "if-else:是否高优先级",
+      "phase": "dify:mature-ticket-triage",
+      "seq": 2
+    },
+    {
+      "at": "end",
+      "label": "if-else:是否高优先级",
+      "outcome": "completed",
+      "seq": 2
+    },
+    {
+      "at": "start",
+      "label": "llm:高优先级建议",
+      "phase": "dify:mature-ticket-triage",
+      "seq": 3
+    },
+    {
+      "at": "end",
+      "label": "llm:高优先级建议",
+      "outcome": "completed",
+      "seq": 3
+    },
+    {
+      "at": "start",
+      "label": "code:关键词拆解",
+      "phase": "dify:mature-ticket-triage",
+      "seq": 4
+    },
+    {
+      "at": "end",
+      "label": "code:关键词拆解",
+      "outcome": "completed",
+      "seq": 4
+    }
+  ],
+  "script": "phase(\"dify:mature-ticket-triage\")\nconst __nodes = {}\nconst __ran = {}\nconst __branch = {}\nconst __answers = []\nconst __text = (v) => v === undefined || v === null ? \"\" : Array.isArray(v) ? v.map((x) => x !== null && typeof x === \"object\" ? (x.content ?? JSON.stringify(x)) : String(x)).join(\"\\n\") : typeof v === \"object\" ? JSON.stringify(v) : String(v)\nconst __empty = (v) => v === undefined || v === null || v === \"\" || (Array.isArray(v) && v.length === 0) || (typeof v === \"object\" && !Array.isArray(v) && Object.keys(v).length === 0)\nconst __num = (v) => { if (typeof v === \"boolean\" || v === null || v === undefined || v === \"\") return undefined; const n = typeof v === \"number\" ? v : Number(String(v).trim()); return Number.isFinite(n) ? n : undefined }\nconst __cmp = (left, op, right, varType) => {\n  op = String(op ?? '=').trim()\n  if (op === 'empty') return __empty(left)\n  if (op === 'not empty') return !__empty(left)\n  if (op === 'null') return left === undefined || left === null\n  if (op === 'not null') return left !== undefined && left !== null\n  const a = __num(left)\n  const b = __num(right)\n  if (a !== undefined && b !== undefined) {\n    if (op === '=' || op === '==' || op === 'is') return a === b\n    if (op === '≠' || op === '!=' || op === 'is not') return a !== b\n    if (op === '>') return a > b\n    if (op === '<') return a < b\n    if (op === '≥' || op === '>=') return a >= b\n    if (op === '≤' || op === '<=') return a <= b\n  }\n  const ls = __text(left)\n  const rs = __text(right)\n  if (op === '=' || op === '==' || op === 'is') return ls === rs\n  if (op === '≠' || op === '!=' || op === 'is not') return ls !== rs\n  if (op === 'contains') return ls.includes(rs)\n  if (op === 'not contains') return !ls.includes(rs)\n  if (op === 'start with') return ls.startsWith(rs)\n  if (op === 'end with') return ls.endsWith(rs)\n  if (op === 'in') return (Array.isArray(right) ? right : [right]).map(__text).includes(ls)\n  if (op === 'not in') return !(Array.isArray(right) ? right : [right]).map(__text).includes(ls)\n  return false\n}\nconst __vars = {\"conversation\":{},\"environment\":{}}\n__vars.sys = { query: args['sys.query'] ?? args['query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '' }\nlet __r0, __r1, __r2, __r3, __r4, __r5, __r6, __r7\n__ran[\"s\"] = true\nif ((__ran[\"s\"] === true)) {\n  const __in0 = {}\n  const __req0 = {\"kind\":\"parameter-extractor\",\"nodeId\":\"pe\",\"title\":\"提取工单参数\",\"timeoutMs\":120000,\"inputs\":{},\"provider\":\"zai\",\"model\":\"glm-4.5-air\",\"temperature\":0.1,\"instruction\":\"你是客服工单解析器。从工单中提取两项：\\npriority：只能是 high 或 normal；\\nkeywords：需要跟进的关键词数组（1-5 个）。\\n只输出 JSON 对象，键为 priority 和 keywords。\",\"reasoningMode\":\"prompt\",\"parameters\":[{\"name\":\"priority\",\"type\":\"string\",\"description\":\"high 或 normal\",\"required\":true},{\"name\":\"keywords\",\"type\":\"array[string]\",\"description\":\"关键词数组\",\"required\":false}],\"query\":\"\"}\n  __req0.inputs = __in0\n  __req0.query = args[\"ticket\"]\n  const __raw0 = await agent(JSON.stringify(__req0), { label: \"parameter-extractor:提取工单参数\" })\n  if (__raw0 === null) throw new Error('dify node pe (parameter-extractor:提取工单参数) failed: no result from provider')\n  __r0 = JSON.parse(__raw0)\n  if (!__r0.ok) throw new Error('dify node pe (parameter-extractor:提取工单参数) failed: ' + (__r0.error ?? 'unknown error'))\n  __nodes[\"pe\"] = __r0\n  __ran[\"pe\"] = true\n}\nif ((__ran[\"pe\"] === true)) {\n  const __in1 = {\"pe.priority\": __r0?.outputs[\"priority\"]}\n  const __req1 = {\"kind\":\"if-else\",\"nodeId\":\"br\",\"title\":\"是否高优先级\",\"timeoutMs\":120000,\"inputs\":{},\"cases\":[{\"case_id\":\"true\",\"logical_operator\":\"and\",\"conditions\":[{\"comparison_operator\":\"=\",\"value\":\"high\",\"varType\":\"string\",\"variable_selector\":[\"pe\",\"priority\"]}]}],\"logical_operator\":\"and\"}\n  __req1.inputs = __in1\n  const __raw1 = await agent(JSON.stringify(__req1), { label: \"if-else:是否高优先级\" })\n  if (__raw1 === null) throw new Error('dify node br (if-else:是否高优先级) failed: no result from provider')\n  __r1 = JSON.parse(__raw1)\n  if (!__r1.ok) throw new Error('dify node br (if-else:是否高优先级) failed: ' + (__r1.error ?? 'unknown error'))\n  __nodes[\"br\"] = __r1\n  __branch[\"br\"] = String(__r1.outputs.result)\n  __ran[\"br\"] = true\n}\nif ((__ran[\"br\"] === true && __branch[\"br\"] === \"true\")) {\n  const __in2 = {}\n  const __req2 = {\"kind\":\"llm\",\"nodeId\":\"high\",\"title\":\"高优先级建议\",\"timeoutMs\":120000,\"inputs\":{},\"provider\":\"zai\",\"model\":\"glm-4.5-air\",\"temperature\":0.3,\"maxTokens\":120,\"prompt\":[{\"role\":\"system\",\"text\":\"\"},{\"role\":\"user\",\"text\":\"\"}]}\n  __req2.inputs = __in2\n  __req2.prompt[0].text = (\"你是客服主管，用一句中文给出可执行的处理建议，不超过40字。\")\n  __req2.prompt[1].text = (\"工单：\" + __text(args[\"ticket\"]))\n  const __raw2 = await agent(JSON.stringify(__req2), { label: \"llm:高优先级建议\" })\n  if (__raw2 === null) throw new Error('dify node high (llm:高优先级建议) failed: no result from provider')\n  __r2 = JSON.parse(__raw2)\n  if (!__r2.ok) throw new Error('dify node high (llm:高优先级建议) failed: ' + (__r2.error ?? 'unknown error'))\n  __nodes[\"high\"] = __r2\n  __ran[\"high\"] = true\n}\nif ((__ran[\"br\"] === true && __branch[\"br\"] === \"false\")) {\n  __r3 = { ok: true, kind: 'template-transform', title: \"常规队列\", outputs: { output: (\"常规工单，按队列处理。\") } }\n  __nodes[\"normal\"] = __r3\n  __ran[\"normal\"] = true\n}\nif ((__ran[\"high\"] === true) || (__ran[\"normal\"] === true)) {\n  const __pick = [__r2?.outputs[\"text\"], __r3?.outputs[\"output\"]].find((v) => v !== undefined && v !== null)\n  __r4 = { ok: true, kind: 'variable-aggregator', title: \"合并建议\", outputs: { output: __pick === undefined ? \"\" : __pick } }\n  __nodes[\"agg\"] = __r4\n  __ran[\"agg\"] = true\n}\nif ((__ran[\"agg\"] === true)) {\n  const __in3 = {\"keywords\": __r0?.outputs[\"keywords\"]}\n  const __req3 = {\"kind\":\"code\",\"nodeId\":\"split\",\"title\":\"关键词拆解\",\"timeoutMs\":120000,\"inputs\":{},\"codeLanguage\":\"python3\",\"code\":\"def main(keywords):\\n    if isinstance(keywords, str):\\n        items = [k.strip() for k in keywords.replace(\\\"，\\\", \\\",\\\").split(\\\",\\\") if k.strip()]\\n    elif isinstance(keywords, list):\\n        items = [str(k).strip() for k in keywords if str(k).strip()]\\n    else:\\n        items = []\\n    if not items:\\n        items = [\\\"general\\\"]\\n    return {\\\"items\\\": items[:5]}\",\"outputs\":{\"items\":{\"type\":\"array[string]\"}}}\n  __req3.inputs = __in3\n  const __raw3 = await agent(JSON.stringify(__req3), { label: \"code:关键词拆解\" })\n  if (__raw3 === null) throw new Error('dify node split (code:关键词拆解) failed: no result from provider')\n  __r5 = JSON.parse(__raw3)\n  if (!__r5.ok) throw new Error('dify node split (code:关键词拆解) failed: ' + (__r5.error ?? 'unknown error'))\n  __nodes[\"split\"] = __r5\n  __ran[\"split\"] = true\n}\nif ((__ran[\"split\"] === true)) {\n  const __items0 = (() => { const v = __r5?.outputs[\"items\"]; return Array.isArray(v) ? v : v === undefined || v === null ? [] : [v] })()\n  const __out0 = []\n  const __ranIt0 = {}\n  const __branchIt0 = {}\n  for (let __idxIt0 = 0; __idxIt0 < __items0.length; __idxIt0++) {\n    const __itemIt0 = __items0[__idxIt0]\n    let __itemFailed = false\n    let __itemValue = null\n    try {\n      if (__idxIt0 >= 0) { __ranIt0[\"iter-start\"] = true }\n      if ((__ranIt0[\"iter-start\"] === true)) {\n        __i0_1 = { ok: true, kind: 'template-transform', title: \"关键词项\", outputs: { output: (\"· \" + __text(__itemIt0)) } }\n        __nodes[\"inner\"] = __i0_1\n        __ranIt0[\"inner\"] = true\n      }\n      const __v = __i0_1?.outputs[\"output\"]\n      __itemValue = __v === undefined ? null : __v\n    } catch (__e) {\n      __itemFailed = true\n      if (!false) __out0.push(null)\n    }\n    if (!__itemFailed) __out0.push(__itemValue)\n  }\n  __r6 = { ok: true, kind: \"iteration\", title: \"逐关键词跟进\", outputs: { output: __out0, length: __out0.length } }\n  __nodes[\"iter\"] = __r6\n  __ran[\"iter\"] = true\n}\nif ((__ran[\"iter\"] === true)) {\n  __r7 = { ok: true, kind: 'template-transform', title: \"汇总回复\", outputs: { output: (\"建议：\" + __text(__r4?.outputs[\"output\"]) + \"\\n关键词：\\n\" + __text(__r6?.outputs[\"output\"])) } }\n  __nodes[\"final\"] = __r7\n  __ran[\"final\"] = true\n}\nconst __outputs = {\"reply\": (__r7?.outputs[\"output\"] === undefined ? null : __r7?.outputs[\"output\"]), \"advice\": (__r4?.outputs[\"output\"] === undefined ? null : __r4?.outputs[\"output\"]), \"keywords\": (__r5?.outputs[\"items\"] === undefined ? null : __r5?.outputs[\"items\"])}\nconst __answer = __answers.length > 0 ? __answers.join('\\n\\n') : ''\nif (__answers.length > 0 && __outputs.answer === undefined) __outputs.answer = __answer\nreturn { nodes: __nodes, outputs: __outputs, answers: __answers }",
+  "durationMs": 7347
+}

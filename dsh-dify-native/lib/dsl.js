@@ -1,35 +1,115 @@
 /**
- * Dify DSL → workflow-script compiler.
+ * Dify DSL → IR → workflow-script compiler.
  *
  * This module owns ONLY the translation layer the guide allows us to write:
- * parse a Dify .yml, read `workflow.graph`, order the nodes, and emit a
+ * parse a Dify .yml, normalize `workflow.graph` into an explicit IR, then emit a
  * JavaScript orchestration script for the harness's existing workflow engine.
  * It contains no scheduler, no executor, no sandbox, no LLM adapter.
  *
- * Supported graph shape (v2): an acyclic graph starting at one `start` node and
- * ending at one `end` node, with LLM / code / if-else / variable-aggregator /
- * template-transform nodes on the way. Branching is compiled into ordinary JS
- * control flow with an activation guard per node; joins (variable-aggregator,
- * or an end node fed by both branches) work because an inactive node simply
- * leaves its result variable `undefined`.
+ * Node coverage is intentionally *complete*: every Dify `BlockEnum` type is
+ * recognized and normalized into an IR node. An unknown future type is still
+ * parsed (kind `generic`, recorded as a warning) so the parse layer never says
+ * "I don't know this node"; execution of such a node is a visible passthrough.
  *
- * Every other node type is reported as unsupported and rejected before a run,
- * never silently skipped.
+ * Graph shape: one entry (`start`, or a trigger/datasource node when the app is
+ * trigger-driven) to one `end` or one/more terminal `answer` nodes, with
+ * iteration / loop containers whose children are associated by `parentId`
+ * (ReactFlow) or `data.iteration_id` / `data.loop_id`.
+ *
+ * Branch ownership stays in code: if-else evaluates its DSL conditions,
+ * question-classifier maps the model's answer back to a pre-declared class id,
+ * http-request maps success/failure to pre-declared edge handles, and
+ * human-input maps its resolved action to a pre-declared action handle. The
+ * model never chooses which edge runs. Iteration and loop bodies are compiled
+ * into ordinary `for` loops (or the engine's `parallel` combinator for
+ * `is_parallel: true`), so loop bounds and item order are code, not model.
  */
 import { parse as parseYaml } from 'yaml'
 
-const SUPPORTED = new Set([
+/**
+ * Canonical node kinds. The first block is Dify's `BlockEnum` (web types.ts),
+ * the rest are wrapper/internal aliases Dify exports and the two internal
+ * markers this compiler also accepts (`iteration-end`, `generic`).
+ */
+export const NODE_KINDS = [
   'start',
   'end',
+  'answer',
+  'llm',
+  'knowledge-retrieval',
+  'question-classifier',
+  'if-else',
+  'code',
+  'template-transform',
+  'http-request',
+  'variable-assigner',
+  'variable-aggregator',
+  'tool',
+  'parameter-extractor',
+  'iteration',
+  'document-extractor',
+  'list-operator',
+  'iteration-start',
+  'assigner',
+  'agent',
+  'loop',
+  'loop-start',
+  'loop-end',
+  'human-input',
+  'datasource',
+  'datasource-empty',
+  'knowledge-index',
+  'trigger-schedule',
+  'trigger-webhook',
+  'trigger-plugin',
+  // accepted aliases / internal markers (not in the frontend enum)
+  'iteration-end',
+  'trigger',
+  'custom-note',
+]
+
+/** Wrapper variant → canonical kind. */
+const KIND_ALIASES = {
+  'variable-assigner': 'assigner',
+  'datasource-empty': 'datasource',
+  'custom-note': 'note',
+  'custom-iteration-start': 'iteration-start',
+  'trigger': 'trigger',
+}
+
+export const KNOWN_KINDS = new Set(NODE_KINDS.map((kind) => KIND_ALIASES[kind] ?? kind))
+
+/** Kinds that execute through the `dify-node` host provider (one agent() call). */
+const HOST_KINDS = new Set([
   'llm',
   'code',
   'if-else',
-  'variable-aggregator',
-  'template-transform',
+  'question-classifier',
+  'http-request',
+  'tool',
+  'knowledge-retrieval',
+  'knowledge-index',
+  'agent',
+  'parameter-extractor',
+  'document-extractor',
+  'datasource',
+  'human-input',
 ])
 
-/** Node types that need a host capability (agent call) instead of pure script logic. */
-const HOST_NODES = new Set(['llm', 'code', 'if-else'])
+/** Kinds whose outgoing edge handle names a pre-declared branch. */
+const BRANCH_KINDS = new Set(['if-else', 'question-classifier', 'http-request', 'human-input'])
+
+/** Kinds that own a nested sub-graph. */
+const CONTAINER_KINDS = new Set(['iteration', 'loop'])
+
+/** Kinds that may be a graph entry when there is no `start` node. */
+const TRIGGER_KINDS = new Set(['trigger', 'trigger-schedule', 'trigger-webhook', 'trigger-plugin', 'datasource'])
+
+/** Kinds that are internal container markers, never top-level work. */
+const MARKER_KINDS = new Set(['iteration-start', 'iteration-end', 'loop-start', 'loop-end'])
+
+/** Kinds that produce no work and may sit disconnected on the canvas. */
+const NON_EXECUTABLE_KINDS = new Set(['note'])
 
 function nodeType(node) {
   return node?.data?.type ?? node?.type
@@ -43,27 +123,47 @@ function edgeHandle(edge) {
   return edge?.sourceHandle ?? 'source'
 }
 
+/** Normalize a raw Dify `data.type` (incl. wrapper aliases) to a canonical kind. */
+export function normalizeKind(rawType) {
+  const raw = String(rawType ?? '')
+  const kind = KIND_ALIASES[raw] ?? raw
+  return KNOWN_KINDS.has(kind) ? kind : 'generic'
+}
+
 /** Selector `['node-id', 'var']` → JS expression in the generated script. */
-function selectorExpr(selector, ctx) {
+function selectorExpr(selector, scope) {
   if (!Array.isArray(selector) || selector.length !== 2) {
     throw new Error(`unsupported value_selector ${JSON.stringify(selector)}`)
   }
   const [nodeId, name] = selector
   const key = JSON.stringify(String(name))
-  if (String(nodeId) === ctx.startId) return `args[${key}]`
-  const binding = ctx.varByNode.get(String(nodeId))
+  const head = String(nodeId)
+  if (head === scope.startId) return `args[${key}]`
+  // Dify's variable scopes. `conversation` / `environment` start from the DSL's
+  // declared values and are updated by assigner nodes; `sys` is derived from
+  // the run inputs.
+  if (head === 'conversation' || head === 'environment' || head === 'sys') return `__vars[${JSON.stringify(head)}][${key}]`
+  // Container-local bindings: iteration-start / loop-start expose `item`/`index`,
+  // and their declared variables resolve to the current loop's JS values.
+  const local = scope.locals?.get(head)
+  if (local !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(local, name)) return local[name]
+    return 'undefined'
+  }
+  const binding = scope.varByNode.get(head)
   // A node in an untaken branch stays `undefined`; optional chaining lets a
   // join (variable-aggregator / end) read it without throwing.
   if (binding !== undefined) return `${binding}?.outputs[${key}]`
-  throw new Error(`value_selector ${nodeId}.${name} does not name a start input or a preceding node`)
+  throw new Error(`value_selector ${nodeId}.${name} does not name an entry input, a variable scope, a container-local binding, or a preceding node`)
 }
 
 /**
- * Render a Dify text (LLM prompt / template body) into a JS string expression.
- * `{{#node.var#}}` references resolve through `selectorExpr`; `{{ name }}`
- * references resolve through the node's own `variables` bindings.
+ * Render a Dify text (LLM prompt / template body / agent instruction) into a
+ * JS string expression. `{{#node.var#}}` references resolve through
+ * `selectorExpr`; `{{ name }}` references resolve through the node's own
+ * `variables` bindings.
  */
-function renderTextExpr(text, selectorCtx, localBindings = new Map()) {
+function renderTextExpr(text, scope, localBindings = new Map()) {
   /** Split one literal into literal/expression segments on `{{ name }}` bindings. */
   const expandLocals = (literal) => {
     if (localBindings.size === 0) return [{ literal }]
@@ -89,23 +189,31 @@ function renderTextExpr(text, selectorCtx, localBindings = new Map()) {
   while ((match = ref.exec(text)) !== null) {
     if (match.index > cursor) expanded.push(...expandLocals(text.slice(cursor, match.index)))
     const selector = match[1].split('.')
-    if (selector.length < 2) throw new Error(`malformed prompt reference {{#${match[1]}#}}`)
-    expanded.push({ expr: selectorExpr([selector[0], selector.slice(1).join('.')], selectorCtx) })
+    if (selector.length === 1 && localBindings.has(selector[0])) {
+      // Dify's reserved `{{#context#}}` placeholder names a node-local binding,
+      // not a node output selector.
+      expanded.push({ expr: localBindings.get(selector[0]) })
+    } else {
+      if (selector.length < 2) throw new Error(`malformed prompt reference {{#${match[1]}#}}`)
+      expanded.push({ expr: selectorExpr([selector[0], selector.slice(1).join('.')], scope) })
+    }
     cursor = ref.lastIndex
   }
   if (cursor < text.length) expanded.push(...expandLocals(text.slice(cursor)))
 
   if (expanded.length === 0) return '""'
   const parts = expanded.map((chunk) =>
-    chunk.expr !== undefined ? `(${chunk.expr} ?? '')` : JSON.stringify(chunk.literal),
+    // `__text` renders arrays of retrieval segments and objects deterministically
+    // instead of JavaScript's `[object Object]`.
+    chunk.expr !== undefined ? `__text(${chunk.expr})` : JSON.stringify(chunk.literal),
   )
   return `(${parts.join(' + ')})`
 }
 
 /**
- * Parse a Dify app DSL into the small graph this layer needs.
+ * Parse a Dify app DSL into the raw graph layer.
  * @param text - raw .yml contents.
- * @returns parsed graph plus its start node and start variables.
+ * @returns parsed graph plus its declared variable scopes.
  */
 export function parseDifyDsl(text) {
   const doc = parseYaml(text)
@@ -122,307 +230,1336 @@ export function parseDifyDsl(text) {
     edges: Array.isArray(graph.edges) ? graph.edges : [],
     environmentVariables: Array.isArray(workflow.environment_variables) ? workflow.environment_variables : [],
     conversationVariables: Array.isArray(workflow.conversation_variables) ? workflow.conversation_variables : [],
+    agentPackages: doc.agent_packages ?? {},
+    raw: doc,
   }
 }
 
+/** One ReactFlow node → one normalized IR node (no graph logic yet). */
+function normalizeNode(node) {
+  const rawType = String(nodeType(node) ?? '')
+  const kind = normalizeKind(rawType)
+  const data = node.data ?? {}
+  return {
+    id: String(node.id),
+    rawType,
+    kind,
+    title: nodeTitle(node),
+    parentId: node.parentId != null ? String(node.parentId) : undefined,
+    isInIteration: data.isInIteration === true,
+    isInLoop: data.isInLoop === true,
+    iterationId: data.iteration_id != null ? String(data.iteration_id) : undefined,
+    loopId: data.loop_id != null ? String(data.loop_id) : undefined,
+    data,
+    raw: node,
+  }
+}
+
+/** Declared container association of a normalized node, if any. */
+function declaredParent(node) {
+  return node.parentId ?? node.iterationId ?? node.loopId
+}
+
 /**
- * Inspect the parsed graph without executing it.
+ * Build the explicit IR: normalized nodes, container sub-graphs, top-level
+ * edges, and the entry node. Pure parsing — no execution, no ordering errors
+ * thrown here (inspection reports them instead).
+ *
  * @param parsed - result of {@link parseDifyDsl}.
- * @returns node inventory, start inputs, and the unsupported-node list.
+ * @returns `{ appName, mode, nodes, byId, edges, topNodes, topEdges, containers, entryId, entryKind, startId, startInputs, requiredInputs, warnings, unknownKinds }`
  */
-export function inspectGraph(parsed) {
-  const byId = new Map(parsed.nodes.map((node) => [String(node.id), node]))
-  const starts = parsed.nodes.filter((node) => nodeType(node) === 'start')
-  const unsupported = parsed.nodes
-    .filter((node) => !SUPPORTED.has(nodeType(node)))
-    .map((node) => ({ id: String(node.id), type: nodeType(node), title: nodeTitle(node) }))
-  const types = {}
-  for (const node of parsed.nodes) types[nodeType(node)] = (types[nodeType(node)] ?? 0) + 1
+export function buildIR(parsed) {
+  const nodes = parsed.nodes.map(normalizeNode)
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const warnings = []
+
+  for (const node of nodes) {
+    if (node.kind === 'generic') {
+      warnings.push(`node ${node.id} has unknown type "${node.rawType}"; parsed as generic passthrough`)
+    }
+  }
+
+  // Container children: ReactFlow `parentId`, Dify's `data.iteration_id` /
+  // `data.loop_id`, or (as a last resort) `isInIteration`/`isInLoop` + the
+  // container's own edge into its start node.
+  const containers = new Map()
+  const childOf = new Map()
+  for (const node of nodes) {
+    if (!CONTAINER_KINDS.has(node.kind)) continue
+    const children = nodes.filter((candidate) => {
+      if (candidate.id === node.id) return false
+      const parent = declaredParent(candidate)
+      if (parent !== undefined) return parent === node.id
+      return false
+    })
+    containers.set(node.id, {
+      id: node.id,
+      kind: node.kind,
+      node,
+      children,
+      startId: node.data.start_node_id != null ? String(node.data.start_node_id) : undefined,
+      endId: undefined,
+      innerEdges: [],
+    })
+    for (const child of children) childOf.set(child.id, node.id)
+  }
+
+  // Fallback association for exports that only carry the edge container→start.
+  const edgePairs = parsed.edges.map((edge) => ({
+    id: String(edge.id ?? ''),
+    source: String(edge.source),
+    target: String(edge.target),
+    handle: String(edgeHandle(edge)),
+  }))
+  for (const container of containers.values()) {
+    if (container.children.length > 0) continue
+    const link = edgePairs.find(
+      (edge) =>
+        edge.source === container.id &&
+        byId.has(edge.target) &&
+        (byId.get(edge.target).kind === 'iteration-start' ||
+          byId.get(edge.target).kind === 'loop-start' ||
+          byId.get(edge.target).kind === 'start'),
+    )
+    if (link === undefined) continue
+    const collected = new Set([link.target])
+    const queue = [link.target]
+    while (queue.length > 0) {
+      const current = queue.shift()
+      for (const edge of edgePairs) {
+        if (edge.source !== current) continue
+        if (edge.target === container.id || byId.get(edge.target)?.kind === 'end') continue
+        if (collected.has(edge.target)) continue
+        collected.add(edge.target)
+        queue.push(edge.target)
+      }
+    }
+    container.children = [...collected].map((id) => byId.get(id)).filter(Boolean)
+    for (const child of container.children) childOf.set(child.id, container.id)
+  }
+
+  for (const container of containers.values()) {
+    const childIds = new Set(container.children.map((child) => child.id))
+    container.innerEdges = edgePairs.filter((edge) => childIds.has(edge.source) && childIds.has(edge.target))
+    const marker = container.children.find((child) => child.kind === `${container.kind}-start`)
+    if (container.startId === undefined) container.startId = marker?.id ?? container.children[0]?.id
+    const endMarker = container.children.find((child) => child.kind === `${container.kind}-end`)
+    container.endId = endMarker?.id
+    if (container.children.length === 0) {
+      warnings.push(`container ${container.id} (${container.kind}) has no child nodes associated by parentId/iteration_id/loop_id`)
+    }
+    if (container.startId !== undefined && !childIds.has(container.startId)) {
+      warnings.push(`container ${container.id} start_node_id ${container.startId} is not one of its children`)
+    }
+  }
+
+  const isInner = (id) => childOf.has(id)
+  const topNodes = nodes.filter((node) => !isInner(node.id))
+  const topIds = new Set(topNodes.map((node) => node.id))
+  const topEdges = edgePairs.filter((edge) => topIds.has(edge.source) && topIds.has(edge.target))
+
+  // Entry: exactly one start, else one trigger-ish node, else the first
+  // disconnected executable node (reported as an issue by inspection).
+  const starts = topNodes.filter((node) => node.kind === 'start')
+  const triggers = topNodes.filter((node) => TRIGGER_KINDS.has(node.kind))
+  const entry = starts[0] ?? triggers[0]
+  const entryId = entry?.id
+  const entryKind = entry?.kind
+
   const start = starts[0]
   const startVariables = (start?.data?.variables ?? []).filter((v) => v?.variable)
   const startInputs = startVariables.map((v) => v.variable)
   const requiredInputs = startVariables.filter((v) => v.required !== false).map((v) => v.variable)
-  const end = parsed.nodes.find((node) => nodeType(node) === 'end')
-  const endOutputs = (end?.data?.outputs ?? []).map((o) => o.variable).filter(Boolean)
-  const issues = []
-  if (starts.length !== 1) issues.push(`expected exactly one start node, found ${starts.length}`)
-  if (end === undefined) issues.push('no end node')
-  if (unsupported.length > 0) issues.push(`unsupported node types: ${unsupported.map((n) => `${n.type}/${n.id}`).join(', ')}`)
+
   return {
-    nodeCount: parsed.nodes.length,
-    nodeTypes: types,
+    appName: parsed.appName,
+    mode: parsed.mode,
+    nodes,
+    byId,
+    edges: edgePairs,
+    topNodes,
+    topEdges,
+    containers,
+    entryId,
+    entryKind,
+    startId: start?.id,
     startInputs,
     requiredInputs,
-    endOutputs,
-    unsupported,
-    issues,
-    nodeIds: [...byId.keys()],
+    unknownKinds: [...new Set(nodes.filter((n) => n.kind === 'generic').map((n) => n.rawType))],
+    warnings,
   }
 }
 
-/** Kahn topological order, preferring the DSL's own node order for ties. */
-function topologicalOrder(parsed, byId, incoming, outgoing) {
-  const index = new Map(parsed.nodes.map((node, i) => [String(node.id), i]))
-  const indegree = new Map([...byId.keys()].map((id) => [id, (incoming.get(id) ?? []).length]))
-  const ready = [...byId.keys()].filter((id) => indegree.get(id) === 0).sort((a, b) => index.get(a) - index.get(b))
+/** Incoming/outgoing adjacency for a node id set + edge list. */
+function adjacency(ids, edges) {
+  const idSet = new Set(ids)
+  const incoming = new Map()
+  const outgoing = new Map()
+  for (const id of idSet) {
+    incoming.set(id, [])
+    outgoing.set(id, [])
+  }
+  for (const edge of edges) {
+    if (!idSet.has(edge.source) || !idSet.has(edge.target)) continue
+    outgoing.get(edge.source).push({ target: edge.target, handle: edge.handle })
+    incoming.get(edge.target).push({ source: edge.source, handle: edge.handle })
+  }
+  return { incoming, outgoing }
+}
+
+/** Kahn order over an explicit node set, preferring the DSL's own node order. */
+function orderNodes(nodes, edges, preferredIndex) {
+  const ids = nodes.map((node) => node.id)
+  const { incoming, outgoing } = adjacency(ids, edges)
+  const indegree = new Map([...incoming].map(([id, list]) => [id, list.length]))
+  const ready = ids.filter((id) => indegree.get(id) === 0).sort((a, b) => preferredIndex(a) - preferredIndex(b))
   const order = []
   while (ready.length > 0) {
     const id = ready.shift()
     order.push(id)
-    const outs = outgoing.get(id) ?? []
-    for (const { target } of outs) {
+    for (const { target } of outgoing.get(id)) {
       indegree.set(target, indegree.get(target) - 1)
       if (indegree.get(target) === 0) {
         ready.push(target)
-        ready.sort((a, b) => index.get(a) - index.get(b))
+        ready.sort((a, b) => preferredIndex(a) - preferredIndex(b))
       }
     }
   }
-  if (order.length !== byId.size) {
+  if (order.length !== ids.length) {
     const placed = new Set(order)
-    const stranded = [...byId.keys()].filter((id) => !placed.has(id))
+    const stranded = ids.filter((id) => !placed.has(id))
     throw new Error(`graph has a cycle or unreachable nodes: ${stranded.join(', ')}`)
   }
   return order
 }
 
+/** Allowed outgoing edge handles for one source node, per Dify's branch contract. */
+function allowedHandles(node) {
+  const kind = node.kind
+  const data = node.data ?? {}
+  if (kind === 'if-else') return new Set([...new Set((data.cases ?? []).map((c) => String(c.case_id ?? ''))), 'false'])
+  if (kind === 'question-classifier') return new Set((data.classes ?? []).map((c) => String(c.id ?? c.name ?? '')))
+  if (kind === 'http-request') {
+    return String(data.error_strategy ?? 'none') === 'fail-branch' ? new Set(['success-branch', 'fail-branch']) : new Set(['source'])
+  }
+  if (kind === 'human-input') {
+    const actions = new Set((data.user_actions ?? []).map((action) => String(action.id ?? '')).filter(Boolean))
+    actions.add('__timeout')
+    return actions
+  }
+  return new Set(['source'])
+}
+
+/** Normalize Dify's header shape (`"K: V"` text or `[{key,value}]`) into pairs. */
+function headerPairs(headers) {
+  if (Array.isArray(headers)) {
+    return headers
+      .filter((item) => item != null && item.key != null && String(item.key).length > 0)
+      .map((item) => ({ key: String(item.key), value: item.value ?? '' }))
+  }
+  if (typeof headers === 'string') {
+    return headers
+      .split(/\r?\n/)
+      .map((line) => {
+        const colon = line.indexOf(':')
+        if (colon <= 0) return undefined
+        return { key: line.slice(0, colon).trim(), value: line.slice(colon + 1).trim() }
+      })
+      .filter(Boolean)
+  }
+  return []
+}
+
+/** Normalize Dify's query-parameter shape (`"k=v"` text or `[{key,value}]`). */
+function paramPairs(params) {
+  if (Array.isArray(params)) {
+    return params
+      .filter((item) => item != null && item.key != null && String(item.key).length > 0)
+      .map((item) => ({ key: String(item.key), value: item.value ?? '' }))
+  }
+  if (typeof params === 'string') {
+    return params
+      .split(/\r?\n/)
+      .map((line) => {
+        const eq = line.indexOf('=')
+        if (eq <= 0) return undefined
+        return { key: line.slice(0, eq).trim(), value: line.slice(eq + 1).trim() }
+      })
+      .filter(Boolean)
+  }
+  return []
+}
+
+/** One HTTP body data item → a JS expression for its value. */
+function bodyValueExpr(item, scope) {
+  const value = item?.value
+  if (item?.type === 'variable' && Array.isArray(value)) return selectorExpr(value, scope)
+  if (typeof value === 'string') return renderTextExpr(value, scope)
+  if (value === undefined) return '""'
+  return JSON.stringify(value)
+}
+
+/** Compile a Dify `body` block into a concrete JS object expression. */
+function bodyExpr(body, scope) {
+  const type = String(body?.type ?? 'none')
+  if (type === 'none') return `{type:'none'}`
+  if (type === 'json') {
+    if (Array.isArray(body.data)) {
+      const items = body.data
+        .filter((item) => item != null && item.key != null && String(item.key).length > 0)
+        .map((item) => `{key:${JSON.stringify(String(item.key))}, value:${bodyValueExpr(item, scope)}}`)
+      return `{type:'json', data:[${items.join(', ')}]}`
+    }
+    if (typeof body.data === 'string') return `{type:'json', raw:${renderTextExpr(body.data, scope)}}`
+    return `{type:'json', value:${JSON.stringify(body.data ?? {})}}`
+  }
+  if (type === 'raw-text') return `{type:'raw-text', data:${renderTextExpr(String(body.data ?? ''), scope)}}`
+  if (type === 'x-www-form-urlencoded') {
+    const items = (Array.isArray(body.data) ? body.data : [])
+      .filter((item) => item != null && item.key != null && String(item.key).length > 0)
+      .map((item) => `{key:${JSON.stringify(String(item.key))}, value:${bodyValueExpr(item, scope)}}`)
+    return `{type:'x-www-form-urlencoded', data:[${items.join(', ')}]}`
+  }
+  throw new Error(`unsupported http-request body type "${type}" (supported: none, json, raw-text, x-www-form-urlencoded)`)
+}
+
+/** Dify's HTTP node timeout is seconds; pick the largest non-zero phase budget. */
+function httpTimeoutMs(data) {
+  const timeout = data?.timeout
+  if (typeof timeout === 'number' && timeout > 0) return Math.round(timeout * 1000)
+  if (timeout != null && typeof timeout === 'object') {
+    const seconds = ['max_connect_timeout', 'max_read_timeout', 'max_write_timeout']
+      .map((key) => Number(timeout[key]) || 0)
+      .filter((value) => value > 0)
+    if (seconds.length > 0) return Math.round(Math.max(...seconds) * 1000)
+  }
+  return 30_000
+}
+
+/** Normalize both Dify assigner shapes (v1 single target, v2 `items[]`). */
+function assignerItems(data) {
+  if (Array.isArray(data.items) && data.items.length > 0) return data.items
+  if (Array.isArray(data.assigned_variable_selector) && data.assigned_variable_selector.length > 0) {
+    const input = data.input_variable_selector
+    return [
+      {
+        variable_selector: data.assigned_variable_selector,
+        input_type: Array.isArray(input) ? 'variable' : 'constant',
+        value: Array.isArray(input) ? input : data.value,
+        operation: data.write_mode ?? data.operation ?? 'over-write',
+      },
+    ]
+  }
+  return []
+}
+
+/** A Dify "typed value" (`{type, value}` or a plain literal) → JS expression. */
+function difyValueExpr(raw, scope) {
+  if (raw != null && typeof raw === 'object' && 'value' in raw && ('type' in raw || 'selector' in raw)) {
+    const value = raw.value
+    if (raw.type === 'variable' && Array.isArray(value)) return selectorExpr(value, scope)
+    if (Array.isArray(value) && value.length === 2 && value.every((part) => typeof part === 'string')) {
+      // Newer exports encode a selector as a bare 2-string array with
+      // `type: variable`; older ones omit the type.
+      return selectorExpr(value, scope)
+    }
+    if (raw.selector !== undefined && Array.isArray(raw.selector) && raw.selector.length === 2) {
+      return selectorExpr(raw.selector, scope)
+    }
+    if (typeof value === 'string') return renderTextExpr(value, scope)
+    return JSON.stringify(value ?? '')
+  }
+  if (typeof raw === 'string') return renderTextExpr(raw, scope)
+  return JSON.stringify(raw ?? '')
+}
+
+/** Build a concrete JS object expression for a Dify tool node's parameters. */
+function toolArgumentsExpr(parameters, scope) {
+  const entries = []
+  for (const [key, raw] of Object.entries(parameters ?? {})) {
+    entries.push(`${JSON.stringify(key)}: ${difyValueExpr(raw, scope)}`)
+  }
+  return `{${entries.join(', ')}}`
+}
+
+/** Build a concrete JS object expression for datasource / plugin parameters. */
+function parameterObjectExpr(parameters, scope) {
+  const entries = []
+  for (const [key, raw] of Object.entries(parameters ?? {})) {
+    entries.push(`${JSON.stringify(key)}: ${difyValueExpr(raw, scope)}`)
+  }
+  return `{${entries.join(', ')}}`
+}
+
+/** The local `{{ name }}` bindings for an LLM/template/answer node. */
+function localBindings(node, scope) {
+  const local = new Map()
+  for (const item of node.data?.variables ?? []) {
+    if (item?.variable) local.set(item.variable, selectorExpr(item.value_selector, scope))
+  }
+  // `{{#context#}}` is Dify's reserved placeholder for a node's context block.
+  const context = node.data?.context
+  if (context?.enabled === true && Array.isArray(context.variable_selector)) {
+    local.set('context', selectorExpr(context.variable_selector, scope))
+  }
+  return local
+}
+
+/** One Dify if-else condition → JS boolean expression using the script's `__cmp`. */
+function conditionExpr(condition, scope) {
+  const selector = condition?.variable_selector
+  const left = Array.isArray(selector) ? selectorExpr(selector, scope) : 'undefined'
+  return `__cmp(${left}, ${JSON.stringify(String(condition?.comparison_operator ?? '='))}, ${JSON.stringify(condition?.value ?? null)}, ${JSON.stringify(condition?.varType ?? null)})`
+}
+
+/** The agent node's strategy parameters flattened to plain values. */
+function agentParameterMap(data) {
+  const out = {}
+  for (const [key, raw] of Object.entries(data?.agent_parameters ?? {})) {
+    out[key] = raw != null && typeof raw === 'object' && 'value' in raw ? raw.value : raw
+  }
+  return out
+}
+
+/** Dify agent model, from either the legacy strategy params or the node block. */
+function agentModel(data) {
+  const params = agentParameterMap(data)
+  const fromParams = params.model
+  if (fromParams != null && typeof fromParams === 'object' && (fromParams.provider || fromParams.name || fromParams.model)) {
+    return { provider: fromParams.provider, name: fromParams.name ?? fromParams.model, completion: fromParams.completion_params ?? {} }
+  }
+  const model = data?.model ?? {}
+  return { provider: model.provider, name: model.name, completion: model.completion_params ?? {} }
+}
+
+/** Nodes of one unit (top level or one container body) with their own scope. */
+function unitFor(nodes, edges, entryId) {
+  const preferred = new Map(nodes.map((node, index) => [node.id, index]))
+  return {
+    nodes,
+    edges,
+    entryId,
+    order: orderNodes(nodes, edges, (id) => preferred.get(id) ?? 0),
+  }
+}
+
 /**
- * Compile the parsed graph into a workflow-engine script.
+ * Inspect the IR without executing it: node inventory, entry inputs, container
+ * map, and every structural problem that would make a deterministic run
+ * impossible (or ambiguous).
+ */
+export function inspectIR(ir) {
+  const types = {}
+  for (const node of ir.nodes) types[node.kind] = (types[node.kind] ?? 0) + 1
+  const issues = []
+  const starts = ir.topNodes.filter((node) => node.kind === 'start')
+  const entry = ir.byId.get(ir.entryId)
+  if (starts.length > 1) issues.push(`expected at most one start node, found ${starts.length}`)
+  if (entry === undefined) issues.push('no start node and no trigger node to enter the graph')
+  const terminals = ir.topNodes.filter((node) => node.kind === 'end' || node.kind === 'answer')
+  if (terminals.length === 0) issues.push('no end node and no terminal answer node')
+
+  const topIds = new Set(ir.topNodes.map((node) => node.id))
+  for (const edge of ir.edges) {
+    if (!ir.byId.has(edge.source) || !ir.byId.has(edge.target)) {
+      issues.push(`edge ${edge.id} references an unknown node`)
+      continue
+    }
+    // Container ↔ child edges belong to the container body, not the main DAG.
+    if (!topIds.has(edge.source) || !topIds.has(edge.target)) continue
+    const source = ir.byId.get(edge.source)
+    const allowed = allowedHandles(source)
+    if (!allowed.has(edge.handle)) {
+      issues.push(`edge ${edge.id} leaves ${edge.source} (${source.kind}) on handle "${edge.handle}"; allowed: ${[...allowed].join(', ') || '(none)'}`)
+    }
+    if (source.kind === 'question-classifier') {
+      const ids = (source.data.classes ?? []).map((c) => String(c.id ?? c.name ?? ''))
+      if (new Set(ids).size !== ids.length) issues.push(`question-classifier ${edge.source} has duplicate class ids`)
+    }
+  }
+
+  const { outgoing } = adjacency([...topIds], ir.topEdges)
+  for (const node of ir.topNodes) {
+    const outs = outgoing.get(node.id) ?? []
+    if (node.kind === 'end' || node.kind === 'answer' || node.kind === 'note') continue
+    if (BRANCH_KINDS.has(node.kind)) {
+      const handles = outs.map((item) => item.handle)
+      if (new Set(handles).size !== handles.length) issues.push(`${node.kind} ${node.id} has duplicate branch edges`)
+      continue
+    }
+    // Non-branch fan-out is legal in Dify (parallel arms). The compiled model
+    // runs each arm in topological order behind its own `__ran[source]` guard,
+    // so the schedule stays dataflow-driven; no edge is guessed.
+    if (outs.length === 0 && !NON_EXECUTABLE_KINDS.has(node.kind)) {
+      issues.push(`node ${node.id} (${node.kind}) has no outgoing edge and is not a terminal node`)
+    }
+  }
+
+  for (const container of ir.containers.values()) {
+    if (container.children.length > 0) {
+      try {
+        orderNodes(container.children, container.innerEdges, () => 0)
+      } catch (error) {
+        issues.push(`container ${container.id}: ${error.message}`)
+      }
+    }
+  }
+  try {
+    orderNodes(ir.topNodes, ir.topEdges, () => 0)
+  } catch (error) {
+    issues.push(error.message)
+  }
+
+  if (entry !== undefined && !NON_EXECUTABLE_KINDS.has(entry.kind)) {
+    const reachable = new Set()
+    const queue = [entry.id]
+    while (queue.length > 0) {
+      const id = queue.shift()
+      if (reachable.has(id)) continue
+      reachable.add(id)
+      for (const item of outgoing.get(id) ?? []) queue.push(item.target)
+    }
+    for (const node of ir.topNodes) {
+      if (NON_EXECUTABLE_KINDS.has(node.kind)) continue
+      if (!reachable.has(node.id)) issues.push(`node ${node.id} (${node.kind}) is not reachable from the entry node`)
+    }
+  }
+
+  return {
+    nodeCount: ir.nodes.length,
+    nodeTypes: types,
+    startInputs: ir.startInputs,
+    requiredInputs: ir.requiredInputs,
+    endOutputs: (ir.topNodes.find((node) => node.kind === 'end')?.data?.outputs ?? []).map((out) => out.variable).filter(Boolean),
+    answerCount: ir.topNodes.filter((node) => node.kind === 'answer').length,
+    entry: entry === undefined ? null : { id: entry.id, kind: entry.kind },
+    containers: [...ir.containers.values()].map((container) => ({
+      id: container.id,
+      kind: container.kind,
+      startId: container.startId ?? null,
+      endId: container.endId ?? null,
+      children: container.children.map((child) => child.id),
+    })),
+    unknownKinds: ir.unknownKinds,
+    // Kept for callers/tests from earlier rounds: complete coverage means this
+    // list is always empty; unknown future types are visible in `unknownKinds`.
+    unsupported: [],
+    issues,
+    warnings: ir.warnings,
+    nodeIds: ir.nodes.map((node) => node.id),
+  }
+}
+
+/** Inspect a parsed DSL (convenience wrapper around {@link buildIR}). */
+export function inspectGraph(parsed) {
+  return inspectIR(buildIR(parsed))
+}
+
+/**
+ * Compile the IR into a workflow-engine script.
  *
- * The emitted script uses only the engine's documented globals
- * (`agent`, `phase`, `args`) and returns plain JSON. LLM / code / if-else nodes
- * become one `agent()` call per execution whose prompt is a JSON request for
- * the `dify-node` subagent provider; the provider performs the actual model
- * call, sandboxed code run, or condition evaluation. Variable-aggregator and
- * template-transform nodes compile to plain JS, so a branch join costs no agent
- * call.
+ * The emitted script uses the engine's documented globals (`agent`, `parallel`,
+ * `phase`, `args`). Host nodes become one `agent()` call whose prompt is a JSON
+ * request for the `dify-node` subagent provider. Aggregator / template /
+ * assigner / answer / list-operator / trigger compile to plain JS, and
+ * iteration/loop bodies compile to ordinary control flow (or `parallel` for
+ * `is_parallel: true`), so loop bounds and item order are code.
  *
  * @param parsed - result of {@link parseDifyDsl}.
  * @param options - `name` used in the workflow meta, per-node timeout.
  * @returns the script, meta, execution order, and bound end outputs.
- * @throws when the graph is not a supported acyclic start→…→end graph.
+ * @throws when the graph is structurally ambiguous or a node config is invalid.
  */
 export function compileGraph(parsed, options = {}) {
-  const inspection = inspectGraph(parsed)
+  const ir = buildIR(parsed)
+  const inspection = inspectIR(ir)
   if (inspection.issues.length > 0) throw new Error(inspection.issues.join('; '))
+  if (ir.entryId === undefined) throw new Error('no entry node')
 
-  const byId = new Map(parsed.nodes.map((node) => [String(node.id), node]))
-  const start = parsed.nodes.find((node) => nodeType(node) === 'start')
-  const startId = String(start.id)
-
-  const outgoing = new Map()
-  const incoming = new Map()
-  for (const edge of parsed.edges) {
-    const source = String(edge.source)
-    const target = String(edge.target)
-    if (!byId.has(source) || !byId.has(target)) throw new Error(`edge ${edge.id} references an unknown node`)
-    const sourceType = nodeType(byId.get(source))
-    const handle = String(edgeHandle(edge))
-    if (sourceType !== 'if-else' && handle !== 'source') {
-      throw new Error(`edge ${edge.id} leaves ${source} (${sourceType}) on handle "${handle}"; only if-else branches`)
-    }
-    if (sourceType === 'if-else') {
-      const caseIds = new Set((byId.get(source).data.cases ?? []).map((c) => String(c.case_id)))
-      if (!caseIds.has(handle) && handle !== 'false') {
-        throw new Error(`edge ${edge.id} leaves if-else ${source} on unknown branch "${handle}"`)
-      }
-    }
-    if (!outgoing.has(source)) outgoing.set(source, [])
-    outgoing.get(source).push({ target, handle })
-    if (!incoming.has(target)) incoming.set(target, [])
-    incoming.get(target).push({ source, handle })
-  }
-  if (!outgoing.has(startId)) throw new Error('start node has no outgoing edge')
-  for (const [id, outs] of outgoing) {
-    const type = nodeType(byId.get(id))
-    if (type === 'end') throw new Error(`end node ${id} has outgoing edges`)
-    if (type === 'if-else') {
-      // An if-else may leave a branch unconnected, but each emitted branch must be unique.
-      const handles = outs.map((o) => o.handle)
-      if (new Set(handles).size !== handles.length) throw new Error(`if-else ${id} has duplicate branch edges`)
-    } else if (outs.length > 1) {
-      throw new Error(`node ${id} (${type}) has ${outs.length} outgoing edges; only if-else branches`)
-    }
-  }
-
-  const order = topologicalOrder(parsed, byId, incoming, outgoing)
-
-  // One result variable per non-terminal node, declared up front so that a node
-  // in an untaken branch is simply `undefined`.
+  const preferredIndex = new Map(ir.nodes.map((node, index) => [node.id, index]))
   const varByNode = new Map()
-  let varIndex = 0
-  for (const id of order) {
-    const type = nodeType(byId.get(id))
-    if (type === 'start' || type === 'end') continue
-    varByNode.set(id, `__r${varIndex}`)
-    varIndex += 1
-  }
-  const selectorCtx = { startId, varByNode }
-
-  const lines = []
   const nodeMeta = []
+  const lines = []
+  const counters = { call: 0, container: 0, var: 0 }
+
+  const allocate = (id) => {
+    const name = `__r${counters.var}`
+    counters.var += 1
+    varByNode.set(id, name)
+    return name
+  }
+  const START_MARKERS = new Set(['iteration-start', 'loop-start'])
+  // Number result variables in execution order (not DSL order) so traces and
+  // generated scripts stay stable across compiler refactors.
+  const topOrder = orderNodes(ir.topNodes, ir.topEdges, (id) => preferredIndex.get(id) ?? 0)
+  for (const id of topOrder) {
+    const node = ir.byId.get(id)
+    if (node.kind === 'start' || node.kind === 'end' || START_MARKERS.has(node.kind)) continue
+    allocate(node.id)
+  }
+
+  const indentOf = (level) => '  '.repeat(level)
+
   lines.push(`phase(${JSON.stringify(`dify:${parsed.appName || 'workflow'}`)})`)
   lines.push('const __nodes = {}')
   lines.push('const __ran = {}')
   lines.push('const __branch = {}')
-  if (varIndex > 0) lines.push(`let ${[...varByNode.values()].join(', ')}`)
+  lines.push('const __answers = []')
+  // Dify's `{{#context#}}` may hold retrieval segments; render them as text
+  // rather than JavaScript's default `[object Object]`.
+  lines.push(
+    'const __text = (v) => v === undefined || v === null ? "" : Array.isArray(v) ? v.map((x) => x !== null && typeof x === "object" ? (x.content ?? JSON.stringify(x)) : String(x)).join("\\n") : typeof v === "object" ? JSON.stringify(v) : String(v)',
+  )
+  lines.push(
+    'const __empty = (v) => v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0) || (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0)',
+  )
+  lines.push(
+    'const __num = (v) => { if (typeof v === "boolean" || v === null || v === undefined || v === "") return undefined; const n = typeof v === "number" ? v : Number(String(v).trim()); return Number.isFinite(n) ? n : undefined }',
+  )
+  // One deterministic comparison helper shared by if-else-style loop breaks and
+  // list-operator filters (mirrors provider.js's evaluator).
+  lines.push(`const __cmp = (left, op, right, varType) => {
+  op = String(op ?? '=').trim()
+  if (op === 'empty') return __empty(left)
+  if (op === 'not empty') return !__empty(left)
+  if (op === 'null') return left === undefined || left === null
+  if (op === 'not null') return left !== undefined && left !== null
+  const a = __num(left)
+  const b = __num(right)
+  if (a !== undefined && b !== undefined) {
+    if (op === '=' || op === '==' || op === 'is') return a === b
+    if (op === '≠' || op === '!=' || op === 'is not') return a !== b
+    if (op === '>') return a > b
+    if (op === '<') return a < b
+    if (op === '≥' || op === '>=') return a >= b
+    if (op === '≤' || op === '<=') return a <= b
+  }
+  const ls = __text(left)
+  const rs = __text(right)
+  if (op === '=' || op === '==' || op === 'is') return ls === rs
+  if (op === '≠' || op === '!=' || op === 'is not') return ls !== rs
+  if (op === 'contains') return ls.includes(rs)
+  if (op === 'not contains') return !ls.includes(rs)
+  if (op === 'start with') return ls.startsWith(rs)
+  if (op === 'end with') return ls.endsWith(rs)
+  if (op === 'in') return (Array.isArray(right) ? right : [right]).map(__text).includes(ls)
+  if (op === 'not in') return !(Array.isArray(right) ? right : [right]).map(__text).includes(ls)
+  return false
+}`)
+  const conversation = Object.fromEntries(
+    (parsed.conversationVariables ?? []).filter((v) => v?.name).map((v) => [String(v.name), v.value ?? '']),
+  )
+  const environment = Object.fromEntries(
+    (parsed.environmentVariables ?? []).filter((v) => v?.name).map((v) => [String(v.name), v.value ?? '']),
+  )
+  lines.push(`const __vars = ${JSON.stringify({ conversation, environment })}`)
+  lines.push(
+    `__vars.sys = { query: args['sys.query'] ?? args['query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '' }`,
+  )
+  // `entity` is what Dify calls the item of a list-operator / iteration body in
+  // some exports; keep the common ones resolvable.
+  if (counters.var > 0) lines.push(`let ${[...varByNode.values()].join(', ')}`)
 
-  let callIndex = 0
-  for (const id of order) {
-    const node = byId.get(id)
-    const type = nodeType(node)
-    if (type === 'start') {
-      lines.push(`__ran[${JSON.stringify(id)}] = true`)
-      continue
-    }
-    if (type === 'end') continue
-
-    const guard = (incoming.get(id) ?? [])
-      .map(({ source, handle }) => {
-        const sourceType = nodeType(byId.get(source))
-        if (sourceType === 'if-else') {
-          return `(__ran[${JSON.stringify(source)}] === true && __branch[${JSON.stringify(source)}] === ${JSON.stringify(handle)})`
-        }
-        return `(__ran[${JSON.stringify(source)}] === true)`
-      })
-      .join(' || ')
-    if (guard === '') throw new Error(`node ${id} (${type}) is not reachable from the start node`)
-    const variable = varByNode.get(id)
-
-    if (HOST_NODES.has(type)) {
-      const inputs = {}
-      const local = new Map()
-      if (type === 'code') {
-        for (const spec of node.data.variables ?? []) {
-          if (spec?.variable) inputs[spec.variable] = selectorExpr(spec.value_selector, selectorCtx)
-        }
-      } else if (type === 'if-else') {
-        for (const item of node.data.cases ?? []) {
-          for (const condition of item.conditions ?? []) {
-            if (condition?.variable_selector?.[1] !== undefined) {
-              // Key by node id as well: two conditions may read same-named outputs.
-              const key = `${condition.variable_selector[0]}.${condition.variable_selector[1]}`
-              inputs[key] = selectorExpr(condition.variable_selector, selectorCtx)
-            }
-          }
-        }
-      } else if (type === 'llm') {
-        for (const item of node.data.variables ?? []) {
-          if (item?.variable) local.set(item.variable, selectorExpr(item.value_selector, selectorCtx))
-        }
-      }
-
-      const spec = {
-        kind: type,
-        nodeId: id,
-        title: nodeTitle(node),
-        timeoutMs: options.nodeTimeoutMs ?? 120_000,
-        inputs: {},
-      }
-      if (type === 'code') {
-        spec.codeLanguage = node.data.code_language ?? 'python3'
-        spec.code = node.data.code ?? ''
-      }
-      if (type === 'if-else') {
-        spec.cases = (node.data.cases ?? []).map((item) => ({
-          case_id: String(item.case_id ?? ''),
-          logical_operator: item.logical_operator ?? node.data.logical_operator ?? 'and',
-          conditions: (item.conditions ?? []).map((condition) => ({
-            comparison_operator: condition.comparison_operator,
-            value: condition.value,
-            varType: condition.varType,
-            variable_selector: condition.variable_selector,
-          })),
-        }))
-        spec.logical_operator = node.data.logical_operator ?? 'and'
-      }
-      if (type === 'llm') {
-        const model = node.data.model ?? {}
-        const params = model.completion_params ?? {}
-        spec.provider = model.provider
-        spec.model = model.name
-        if (typeof params.temperature === 'number') spec.temperature = params.temperature
-        if (typeof params.max_tokens === 'number') spec.maxTokens = params.max_tokens
-        spec.prompt = (node.data.prompt_template ?? []).map((item) => ({
-          role: item.role === 'system' ? 'system' : item.role === 'assistant' ? 'assistant' : 'user',
-          text: '',
-        }))
-      }
-
-      const label = `${type}:${nodeTitle(node) || id}`
-      const reqVar = `__req${callIndex}`
-      lines.push(`if (${guard}) {`)
-      if (Object.keys(inputs).length > 0) {
-        const env = Object.keys(inputs).map((key) => `${JSON.stringify(key)}: ${inputs[key]}`)
-        lines.push(`  const __in${callIndex} = {${env.join(', ')}}`)
-      } else {
-        lines.push(`  const __in${callIndex} = {}`)
-      }
-      lines.push(`  const ${reqVar} = ${JSON.stringify(spec)}`)
-      lines.push(`  ${reqVar}.inputs = __in${callIndex}`)
-      if (type === 'llm') {
-        ;(node.data.prompt_template ?? []).forEach((item, promptIndex) => {
-          const expr = renderTextExpr(String(item.text ?? ''), selectorCtx, local)
-          lines.push(`  ${reqVar}.prompt[${promptIndex}].text = ${expr}`)
-        })
-      }
-      lines.push(`  const __raw${callIndex} = await agent(JSON.stringify(${reqVar}), { label: ${JSON.stringify(label)} })`)
-      lines.push(`  if (__raw${callIndex} === null) throw new Error('dify node ${id} (${label}) failed: no result from provider')`)
-      lines.push(`  ${variable} = JSON.parse(__raw${callIndex})`)
-      lines.push(`  if (!${variable}.ok) throw new Error('dify node ${id} (${label}) failed: ' + (${variable}.error ?? 'unknown error'))`)
-      lines.push(`  __nodes[${JSON.stringify(id)}] = ${variable}`)
-      if (type === 'if-else') lines.push(`  __branch[${JSON.stringify(id)}] = String(${variable}.outputs.result)`)
-      lines.push(`  __ran[${JSON.stringify(id)}] = true`)
-      lines.push('}')
-      callIndex += 1
-    } else if (type === 'variable-aggregator') {
-      const values = (node.data.variables ?? []).map((selector) => selectorExpr(selector, selectorCtx))
-      const outputType = node.data.output_type ?? 'string'
-      const fallback = outputType === 'array' ? '[]' : '""'
-      lines.push(`if (${guard}) {`)
-      lines.push(`  const __pick = [${values.join(', ')}].find((v) => v !== undefined && v !== null)`)
-      lines.push(
-        `  ${variable} = { ok: true, kind: 'variable-aggregator', title: ${JSON.stringify(nodeTitle(node))}, outputs: { output: __pick === undefined ? ${fallback} : __pick } }`,
-      )
-      lines.push(`  __nodes[${JSON.stringify(id)}] = ${variable}`)
-      lines.push(`  __ran[${JSON.stringify(id)}] = true`)
-      lines.push('}')
-    } else if (type === 'template-transform') {
-      const local = new Map()
-      for (const item of node.data.variables ?? []) {
-        if (item?.variable) local.set(item.variable, selectorExpr(item.value_selector, selectorCtx))
-      }
-      const expr = renderTextExpr(String(node.data.template ?? ''), selectorCtx, local)
-      lines.push(`if (${guard}) {`)
-      lines.push(`  ${variable} = { ok: true, kind: 'template-transform', title: ${JSON.stringify(nodeTitle(node))}, outputs: { output: ${expr} } }`)
-      lines.push(`  __nodes[${JSON.stringify(id)}] = ${variable}`)
-      lines.push(`  __ran[${JSON.stringify(id)}] = true`)
-      lines.push('}')
-    }
-
-    nodeMeta.push({ id, type, title: nodeTitle(node), variable })
+  const scope = {
+    startId: ir.startId,
+    varByNode,
+    locals: new Map(),
+    ran: '__ran',
+    branch: '__branch',
+    nodes: '__nodes',
+    indent: 0,
   }
 
-  const end = parsed.nodes.find((node) => nodeType(node) === 'end')
-  const entries = (end.data.outputs ?? []).map((out, i) => {
-    const expr = selectorExpr(out.value_selector, selectorCtx)
+  /** Guard expression for a node, from the incoming edges of its unit. */
+  const guardFor = (node, unit, incoming) => {
+    if (node.id === unit.entryId) return 'true'
+    const ins = incoming.get(node.id) ?? []
+    if (ins.length === 0) {
+      if (NON_EXECUTABLE_KINDS.has(node.kind) || node.kind === 'trigger' || node.kind.startsWith('trigger-')) return 'true'
+      throw new Error(`node ${node.id} (${node.kind}) is not reachable from the entry node`)
+    }
+    return ins
+      .map(({ source, handle }) => {
+        const sourceNode = ir.byId.get(source)
+        const kind = sourceNode?.kind ?? 'generic'
+        if (BRANCH_KINDS.has(kind)) {
+          return `(${scope.ran}[${JSON.stringify(source)}] === true && ${scope.branch}[${JSON.stringify(source)}] === ${JSON.stringify(handle)})`
+        }
+        if (MARKER_KINDS.has(kind)) return `(${scope.ran}[${JSON.stringify(source)}] === true)`
+        return `(${scope.ran}[${JSON.stringify(source)}] === true)`
+      })
+      .join(' || ')
+  }
+
+  /** Emit one host-node request + agent() call. */
+  const emitHost = (node, unit, guard, level) => {
+    const data = node.data ?? {}
+    const kind = node.kind
+    const pad = indentOf(level)
+    const spec = {
+      kind,
+      nodeId: node.id,
+      title: node.title,
+      timeoutMs: options.nodeTimeoutMs ?? 120_000,
+      inputs: {},
+    }
+    const variable = scope.varByNode.get(node.id)
+    const inputs = {}
+    if (kind === 'code') {
+      for (const item of data.variables ?? []) {
+        if (item?.variable) inputs[item.variable] = selectorExpr(item.value_selector, scope)
+      }
+      spec.codeLanguage = data.code_language ?? 'python3'
+      spec.code = data.code ?? ''
+      spec.outputs = data.outputs ?? {}
+    } else if (kind === 'if-else') {
+      for (const item of data.cases ?? []) {
+        for (const condition of item.conditions ?? []) {
+          if (condition?.variable_selector?.[1] !== undefined) {
+            // Key by node id as well: two conditions may read same-named outputs.
+            const key = `${condition.variable_selector[0]}.${condition.variable_selector[1]}`
+            inputs[key] = selectorExpr(condition.variable_selector, scope)
+          }
+        }
+      }
+      spec.cases = (data.cases ?? []).map((item) => ({
+        case_id: String(item.case_id ?? ''),
+        logical_operator: item.logical_operator ?? data.logical_operator ?? 'and',
+        conditions: (item.conditions ?? []).map((condition) => ({
+          comparison_operator: condition.comparison_operator,
+          value: condition.value,
+          varType: condition.varType,
+          variable_selector: condition.variable_selector,
+        })),
+      }))
+      spec.logical_operator = data.logical_operator ?? 'and'
+    } else if (kind === 'llm') {
+      const model = data.model ?? {}
+      const params = model.completion_params ?? {}
+      spec.provider = model.provider
+      spec.model = model.name
+      if (typeof params.temperature === 'number') spec.temperature = params.temperature
+      if (typeof params.max_tokens === 'number') spec.maxTokens = params.max_tokens
+      spec.prompt = (data.prompt_template ?? []).map((item) => ({
+        role: item.role === 'system' ? 'system' : item.role === 'assistant' ? 'assistant' : 'user',
+        text: '',
+      }))
+    } else if (kind === 'question-classifier') {
+      const model = data.model ?? {}
+      const params = model.completion_params ?? {}
+      spec.classes = (data.classes ?? []).map((item) => ({
+        id: String(item.id ?? item.name ?? ''),
+        name: String(item.name ?? ''),
+      }))
+      spec.instruction = String(data.instruction ?? '')
+      spec.provider = model.provider
+      spec.model = model.name
+      spec.temperature = typeof params.temperature === 'number' ? params.temperature : 0
+      spec.maxTokens = 128
+    } else if (kind === 'http-request') {
+      spec.method = String(data.method ?? 'get').toUpperCase()
+      spec.errorStrategy = String(data.error_strategy ?? 'none')
+      spec.timeoutMs = httpTimeoutMs(data)
+      spec.headers = []
+      spec.params = []
+      spec.body = { type: 'none' }
+      const auth = data.authorization ?? {}
+      const authType = String(auth.type ?? 'no-auth')
+      spec.authorization = { type: authType }
+      if (authType === 'api-key') {
+        const cfg = auth.config ?? {}
+        spec.authorization.config = {
+          type: String(cfg.type ?? 'bearer'),
+          header: String(cfg.header ?? 'Authorization'),
+          api_key: '',
+        }
+      }
+      const defaults = data.default_value
+      if (Array.isArray(defaults)) {
+        spec.defaultValue = Object.fromEntries(
+          defaults.filter((item) => item != null && item.key != null).map((item) => [String(item.key), item.value ?? '']),
+        )
+      } else if (defaults != null && typeof defaults === 'object') {
+        spec.defaultValue = defaults
+      }
+    } else if (kind === 'tool') {
+      spec.provider = data.provider_name ?? data.provider_id ?? ''
+      spec.providerType = data.provider_type ?? ''
+      spec.toolName = String(data.tool_name ?? '')
+      spec.toolLabel = String(data.tool_label ?? '')
+    } else if (kind === 'knowledge-retrieval') {
+      const setting = data.retrieval_setting ?? data.single_retrieval_config ?? data.multiple_retrieval_config ?? {}
+      spec.datasetIds = (data.dataset_ids ?? []).map(String)
+      spec.topK = Number(setting.top_k ?? 4)
+      spec.scoreThreshold = Number(setting.score_threshold ?? 0)
+    } else if (kind === 'knowledge-index') {
+      spec.datasetId = String(data.dataset_id ?? '')
+      spec.keywordNumber = Number(data.keyword_number ?? 10)
+    } else if (kind === 'agent') {
+      const params = agentParameterMap(data)
+      const model = agentModel(data)
+      spec.provider = model.provider
+      spec.model = model.name
+      const completion = model.completion ?? {}
+      if (typeof completion.temperature === 'number') spec.temperature = completion.temperature
+      if (typeof completion.max_tokens === 'number') spec.maxTokens = completion.max_tokens
+      spec.strategy = String(data.agent_strategy_name ?? data.agent_node_kind ?? '')
+      spec.strategyLabel = String(data.agent_strategy_label ?? '')
+      spec.agentVersion = String(data.version ?? '1')
+      spec.instruction = ''
+      spec.query = ''
+      spec.tools = Array.isArray(params.tools)
+        ? params.tools.map((tool) => String(tool?.name ?? tool?.tool_name ?? tool?.provider_name ?? tool ?? ''))
+        : []
+      spec.toolsPolicy = { requested: spec.tools, mode: 'parsed, no tool loop in single-turn execution' }
+      spec.outputSchema = data.output_schema ?? null
+      spec.declaredOutputs = (data.agent_job?.declared_outputs ?? []).map((item) =>
+        typeof item === 'string' ? item : String(item?.name ?? item?.variable ?? ''),
+      ).filter(Boolean)
+    } else if (kind === 'parameter-extractor') {
+      const model = data.model ?? {}
+      spec.provider = model.provider
+      spec.model = model.name
+      spec.temperature = typeof model.completion_params?.temperature === 'number' ? model.completion_params.temperature : 0.1
+      if (typeof model.completion_params?.max_tokens === 'number') spec.maxTokens = model.completion_params.max_tokens
+      spec.instruction = String(data.instruction ?? '')
+      spec.reasoningMode = String(data.reasoning_mode ?? 'prompt')
+      spec.parameters = (data.parameters ?? []).map((item) => ({
+        name: String(item.name ?? ''),
+        type: String(item.type ?? 'string'),
+        description: String(item.description ?? ''),
+        required: item.required === true,
+        options: Array.isArray(item.options) ? item.options : undefined,
+      })).filter((item) => item.name.length > 0)
+      spec.query = ''
+    } else if (kind === 'document-extractor') {
+      spec.arrayFile = data.is_array_file !== false
+    } else if (kind === 'datasource') {
+      spec.provider = String(data.provider_name ?? data.provider_id ?? '')
+      spec.providerType = String(data.provider_type ?? '')
+      spec.datasourceName = String(data.datasource_name ?? '')
+      spec.datasourceLabel = String(data.datasource_label ?? '')
+      spec.parameters = {}
+    } else if (kind === 'human-input') {
+      spec.actions = (data.user_actions ?? []).map((action) => ({ id: String(action.id ?? ''), title: String(action.title ?? '') }))
+      spec.formContent = String(data.form_content ?? '')
+      spec.formInputs = (data.inputs ?? []).map((input) => ({
+        name: String(input.output_variable_name ?? ''),
+        type: String(input.type ?? 'paragraph'),
+        default: input.default ?? null,
+      }))
+      spec.timeout = data.timeout
+      spec.timeoutUnit = data.timeout_unit
+    }
+
+    const label = `${kind}:${node.title || node.id}`
+    const reqVar = `__req${counters.call}`
+    const inVar = `__in${counters.call}`
+    lines.push(`${pad}if (${guard}) {`)
+    const env = Object.keys(inputs).map((key) => `${JSON.stringify(key)}: ${inputs[key]}`)
+    lines.push(`${pad}  const ${inVar} = {${env.join(', ')}}`)
+    lines.push(`${pad}  const ${reqVar} = ${JSON.stringify(spec)}`)
+    lines.push(`${pad}  ${reqVar}.inputs = ${inVar}`)
+    if (kind === 'llm') {
+      ;(data.prompt_template ?? []).forEach((item, promptIndex) => {
+        const expr = renderTextExpr(String(item.text ?? ''), scope, localBindings(node, scope))
+        lines.push(`${pad}  ${reqVar}.prompt[${promptIndex}].text = ${expr}`)
+      })
+    }
+    if (kind === 'question-classifier') {
+      lines.push(`${pad}  ${reqVar}.query = ${selectorExpr(data.query_variable_selector, scope)}`)
+    }
+    if (kind === 'http-request') {
+      lines.push(`${pad}  ${reqVar}.url = ${renderTextExpr(String(data.url ?? ''), scope)}`)
+      const headers = headerPairs(data.headers).map(
+        (item) => `[${JSON.stringify(item.key)}, ${renderTextExpr(String(item.value), scope)}]`,
+      )
+      lines.push(`${pad}  ${reqVar}.headers = [${headers.join(', ')}]`)
+      const params = paramPairs(data.params).map(
+        (item) => `[${JSON.stringify(item.key)}, ${renderTextExpr(String(item.value), scope)}]`,
+      )
+      lines.push(`${pad}  ${reqVar}.params = [${params.join(', ')}]`)
+      lines.push(`${pad}  ${reqVar}.body = ${bodyExpr(data.body, scope)}`)
+      if (spec.authorization?.type === 'api-key') {
+        const cfg = data.authorization?.config ?? {}
+        const keyExpr = Array.isArray(cfg.api_key)
+          ? selectorExpr(cfg.api_key, scope)
+          : renderTextExpr(String(cfg.api_key ?? ''), scope)
+        lines.push(`${pad}  ${reqVar}.authorization.config.api_key = ${keyExpr}`)
+      }
+    }
+    if (kind === 'tool') {
+      lines.push(`${pad}  ${reqVar}.arguments = ${toolArgumentsExpr(data.tool_parameters, scope)}`)
+    }
+    if (kind === 'knowledge-retrieval') {
+      lines.push(`${pad}  ${reqVar}.query = ${selectorExpr(data.query_variable_selector, scope)}`)
+    }
+    if (kind === 'knowledge-index') {
+      lines.push(`${pad}  ${reqVar}.chunk = ${selectorExpr(data.index_chunk_variable_selector, scope)}`)
+    }
+    if (kind === 'agent') {
+      const data2 = node.data ?? {}
+      const params = agentParameterMap(data2)
+      const instruction =
+        data2.agent_job?.workflow_prompt ?? params.instruction ?? data2.instruction ?? ''
+      const query = params.query ?? data2.query ?? ''
+      lines.push(`${pad}  ${reqVar}.instruction = ${typeof instruction === 'string' ? renderTextExpr(instruction, scope) : '""'}`)
+      lines.push(`${pad}  ${reqVar}.query = ${typeof query === 'string' ? renderTextExpr(query, scope) : '""'}`)
+    }
+    if (kind === 'parameter-extractor') {
+      const query = data.query ?? data.query_variable_selector
+      const expr = Array.isArray(query) ? selectorExpr(query, scope) : renderTextExpr(String(query ?? ''), scope)
+      lines.push(`${pad}  ${reqVar}.query = ${expr}`)
+    }
+    if (kind === 'document-extractor') {
+      lines.push(`${pad}  ${reqVar}.files = ${selectorExpr(data.variable_selector, scope)}`)
+    }
+    if (kind === 'datasource') {
+      lines.push(`${pad}  ${reqVar}.parameters = ${parameterObjectExpr(data.datasource_parameters, scope)}`)
+    }
+    if (kind === 'human-input') {
+      // A synchronous run resolves the human step from the run args, then from
+      // the node's declared defaults; the resolved action names the edge.
+      const argsLookup = (name) => `(args[${JSON.stringify(`human.${node.id}.${name}`)}] ?? args[${JSON.stringify(name)}])`
+      lines.push(`${pad}  ${reqVar}.autoAction = ${argsLookup('action')}`)
+    }
+
+    lines.push(`${pad}  const __raw${counters.call} = await agent(JSON.stringify(${reqVar}), { label: ${JSON.stringify(label)} })`)
+    lines.push(`${pad}  if (__raw${counters.call} === null) throw new Error('dify node ${node.id} (${label}) failed: no result from provider')`)
+    lines.push(`${pad}  ${variable} = JSON.parse(__raw${counters.call})`)
+    lines.push(`${pad}  if (!${variable}.ok) throw new Error('dify node ${node.id} (${label}) failed: ' + (${variable}.error ?? 'unknown error'))`)
+    lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+    if (kind === 'if-else') lines.push(`${pad}  ${scope.branch}[${JSON.stringify(node.id)}] = String(${variable}.outputs.result)`)
+    if (kind === 'question-classifier') lines.push(`${pad}  ${scope.branch}[${JSON.stringify(node.id)}] = String(${variable}.outputs.class_id)`)
+    if (kind === 'http-request' && String(data.error_strategy ?? 'none') === 'fail-branch') {
+      lines.push(`${pad}  ${scope.branch}[${JSON.stringify(node.id)}] = String(${variable}.branch ?? 'success-branch')`)
+    }
+    if (kind === 'human-input') {
+      lines.push(`${pad}  ${scope.branch}[${JSON.stringify(node.id)}] = String(${variable}.branch ?? ${JSON.stringify(String((data.user_actions ?? [])[0]?.id ?? ''))})`)
+    }
+    lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+    lines.push(`${pad}}`)
+    counters.call += 1
+  }
+
+  /** Emit a pure-JS node (no agent call). */
+  const emitPure = (node, unit, guard, level) => {
+    const data = node.data ?? {}
+    const kind = node.kind
+    const pad = indentOf(level)
+    const variable = scope.varByNode.get(node.id)
+    const source = unit.edges.filter((edge) => edge.target === node.id).map((edge) => edge.source)
+    const sourceValue = (index = 0) => {
+      const id = source[index]
+      const binding = id === undefined ? undefined : scope.varByNode.get(id)
+      return binding === undefined ? 'undefined' : `${binding}?.outputs`
+    }
+    if (kind === 'note') {
+      lines.push(`${pad}${scope.nodes}[${JSON.stringify(node.id)}] = { ok: true, kind: 'note', title: ${JSON.stringify(node.title)}, outputs: {} }`)
+      lines.push(`${pad}${scope.ran}[${JSON.stringify(node.id)}] = true`)
+      return
+    }
+    if (kind === 'trigger' || kind.startsWith('trigger-') || kind === 'datasource') {
+      // Trigger/datasource entry: expose declared variables from run args, then
+      // the node's declared defaults. No external event source is invented.
+      const declared = Array.isArray(data.variables) ? data.variables : []
+      const fields = declared.map((item) => ({
+        name: String(item.variable ?? item.name ?? ''),
+        selector: item.value_selector,
+      })).filter((item) => item.name.length > 0)
+      const entries = fields.map((item) => {
+        const declaredDefault = data[item.name]?.value ?? item.default ?? null
+        return `${JSON.stringify(item.name)}: (args[${JSON.stringify(item.name)}] ?? ${JSON.stringify(declaredDefault)})`
+      })
+      if (kind === 'trigger-schedule') {
+        entries.push(`triggered_at: new Date(0).toISOString()`)
+        entries.push(`mode: ${JSON.stringify(String(data.mode ?? 'visual'))}`)
+        entries.push(`frequency: ${JSON.stringify(String(data.frequency ?? ''))}`)
+      }
+      if (kind === 'trigger-webhook') {
+        entries.push(`method: ${JSON.stringify(String(data.method ?? 'POST'))}`)
+        entries.push(`body: (args['trigger.body'] ?? null)`)
+      }
+      if (kind === 'trigger-plugin') {
+        entries.push(`event_name: ${JSON.stringify(String(data.event_name ?? ''))}`)
+      }
+      if (kind === 'datasource') {
+        entries.push(`datasource: ${JSON.stringify(String(data.datasource_name ?? ''))}`)
+      }
+      lines.push(`${pad}if (${guard}) {`)
+      lines.push(`${pad}  ${variable} = { ok: true, kind: ${JSON.stringify(kind)}, title: ${JSON.stringify(node.title)}, outputs: {${entries.join(', ')}} }`)
+      lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+      lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+      lines.push(`${pad}}`)
+      return
+    }
+    if (MARKER_KINDS.has(kind)) {
+      // A marker that somehow sits at top level: record it, do not invent work.
+      lines.push(`${pad}${variable} = { ok: true, kind: ${JSON.stringify(kind)}, title: ${JSON.stringify(node.title)}, outputs: {} }`)
+      lines.push(`${pad}${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+      lines.push(`${pad}${scope.ran}[${JSON.stringify(node.id)}] = true`)
+      return
+    }
+    if (kind === 'variable-aggregator') {
+      const values = (data.variables ?? []).map((selector) => selectorExpr(selector, scope))
+      const outputType = data.output_type ?? 'string'
+      const fallback = outputType === 'array' ? '[]' : '""'
+      lines.push(`${pad}if (${guard}) {`)
+      lines.push(`${pad}  const __pick = [${values.join(', ')}].find((v) => v !== undefined && v !== null)`)
+      lines.push(
+        `${pad}  ${variable} = { ok: true, kind: 'variable-aggregator', title: ${JSON.stringify(node.title)}, outputs: { output: __pick === undefined ? ${fallback} : __pick } }`,
+      )
+      lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+      lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+      lines.push(`${pad}}`)
+      return
+    }
+    if (kind === 'template-transform') {
+      const expr = renderTextExpr(String(data.template ?? ''), scope, localBindings(node, scope))
+      lines.push(`${pad}if (${guard}) {`)
+      lines.push(`${pad}  ${variable} = { ok: true, kind: 'template-transform', title: ${JSON.stringify(node.title)}, outputs: { output: ${expr} } }`)
+      lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+      lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+      lines.push(`${pad}}`)
+      return
+    }
+    if (kind === 'assigner') {
+      const items = assignerItems(data)
+      lines.push(`${pad}if (${guard}) {`)
+      for (const item of items) {
+        const selector = item?.variable_selector
+        if (!Array.isArray(selector) || selector.length < 2) {
+          throw new Error(`assigner ${node.id} item has an invalid variable_selector`)
+        }
+        const [head, name] = [String(selector[0]), String(selector[1])]
+        const targetVar = scope.varByNode.get(head)
+        const holder =
+          head === 'conversation' || head === 'environment' || head === 'sys'
+            ? `__vars[${JSON.stringify(head)}]`
+            : head === ir.startId
+              ? 'args'
+              : `${targetVar}.outputs`
+        if (head !== 'conversation' && head !== 'environment' && head !== 'sys' && head !== ir.startId) {
+          if (targetVar === undefined) throw new Error(`assigner ${node.id} target ${head} is not a preceding node`)
+          lines.push(`${pad}  if (${targetVar} === undefined) throw new Error('assigner ${node.id} target ${head}.${name} has not run')`)
+        }
+        const valueExpr =
+          item.input_type === 'constant'
+            ? JSON.stringify(item.value ?? '')
+            : Array.isArray(item.value)
+              ? selectorExpr(item.value, scope)
+              : renderTextExpr(String(item.value ?? ''), scope)
+        const operation = String(item.operation ?? 'over-write')
+        lines.push(`${pad}  {`)
+        lines.push(`${pad}    const __v = ${valueExpr}`)
+        lines.push(`${pad}    const __h = ${holder}`)
+        lines.push(`${pad}    if (__h === undefined || __h === null) throw new Error('assigner ${node.id} target ${head}.${name} is not writable')`)
+        const key = JSON.stringify(name)
+        if (operation === 'clear') {
+          lines.push(`${pad}    delete __h[${key}]`)
+        } else if (operation === 'append') {
+          lines.push(
+            `${pad}    const __c = __h[${key}]; __h[${key}] = Array.isArray(__c) ? [...__c, __v] : (__c === undefined || __c === null ? [__v] : [__c, __v])`,
+          )
+        } else if (operation === 'extend') {
+          lines.push(
+            `${pad}    const __c = __h[${key}]; __h[${key}] = Array.isArray(__c) ? [...__c, ...(Array.isArray(__v) ? __v : [__v])] : (Array.isArray(__v) ? __v : [__v])`,
+          )
+        } else if (['over-write', 'overwrite', 'set', 'overwrite-value', ''].includes(operation)) {
+          lines.push(`${pad}    __h[${key}] = __v`)
+        } else {
+          throw new Error(`assigner ${node.id} operation "${operation}" is not supported`)
+        }
+        lines.push(`${pad}  }`)
+      }
+      lines.push(
+        `${pad}  ${variable} = { ok: true, kind: 'assigner', title: ${JSON.stringify(node.title)}, outputs: {} }`,
+      )
+      lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+      lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+      lines.push(`${pad}}`)
+      return
+    }
+    if (kind === 'answer') {
+      const expr = renderTextExpr(String(data.answer ?? ''), scope, localBindings(node, scope))
+      lines.push(`${pad}if (${guard}) {`)
+      lines.push(`${pad}  const __a = ${expr}`)
+      lines.push(`${pad}  ${variable} = { ok: true, kind: 'answer', title: ${JSON.stringify(node.title)}, outputs: { answer: __a, text: __a } }`)
+      lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+      lines.push(`${pad}  __answers.push(__a)`)
+      lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+      lines.push(`${pad}}`)
+      return
+    }
+    if (kind === 'list-operator') {
+      const inputExpr = selectorExpr(data.variable ?? data.variable_selector, scope)
+      const filters = data.filter_by?.enabled === true ? (data.filter_by.filters ?? []) : []
+      const filterExpr = filters.length === 0
+        ? 'true'
+        : filters.map((filter) => {
+            const value = filter.value
+            const right = filter.value_type === 'variable' && Array.isArray(value) ? selectorExpr(value, scope) : JSON.stringify(value ?? null)
+            return `__cmp(__item[${JSON.stringify(String(filter.key ?? ''))}], ${JSON.stringify(String(filter.comparison_operator ?? '='))}, ${right}, ${JSON.stringify(filter.varType ?? null)})`
+          }).join(' && ')
+      const order = data.order_by?.enabled === true ? data.order_by : undefined
+      const limit = data.limit?.enabled === true ? Math.max(0, Number(data.limit.size ?? 0)) : undefined
+      const extract = data.extract_by?.enabled === true ? String(data.extract_by.serial ?? 'first') : undefined
+      lines.push(`${pad}if (${guard}) {`)
+      lines.push(`${pad}  const __list = (() => { const v = ${inputExpr}; return Array.isArray(v) ? v.slice() : v === undefined || v === null ? [] : [v] })()`)
+      lines.push(`${pad}  let __filtered = __list.filter((__item) => ${filterExpr})`)
+      if (order !== undefined) {
+        const key = String(order.key ?? '')
+        const direction = String(order.value ?? order.order ?? 'asc').toLowerCase() === 'desc' ? -1 : 1
+        lines.push(`${pad}  __filtered = __filtered.slice().sort((a, b) => { const x = a == null ? a : a[${JSON.stringify(key)}]; const y = b == null ? b : b[${JSON.stringify(key)}]; if (x === y) return 0; return (x > y ? 1 : -1) * ${direction} })`)
+      }
+      if (limit !== undefined) lines.push(`${pad}  __filtered = __filtered.slice(0, ${limit})`)
+      lines.push(`${pad}  const __result = ${extract === undefined ? '__filtered' : `(() => { const s = ${JSON.stringify(extract)}; if (s === 'first') return __filtered.slice(0, 1); if (s === 'last') return __filtered.slice(-1); const n = Number(s); return Number.isFinite(n) ? __filtered.slice(Math.max(0, n - 1), Math.max(1, n)) : __filtered.slice(0, 1) })()`}`)
+      lines.push(
+        `${pad}  ${variable} = { ok: true, kind: 'list-operator', title: ${JSON.stringify(node.title)}, outputs: { result: __result, first_record: __result[0] ?? null, last_record: __result[__result.length - 1] ?? null, count: __result.length } }`,
+      )
+      lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+      lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+      lines.push(`${pad}}`)
+      return
+    }
+    if (kind === 'generic') {
+      // An unknown node type must not break parsing or scheduling. It is a
+      // visible passthrough: the outgoing `source` edge still runs.
+      lines.push(`${pad}if (${guard}) {`)
+      lines.push(`${pad}  ${variable} = { ok: true, kind: 'generic', type: ${JSON.stringify(node.rawType)}, title: ${JSON.stringify(node.title)}, outputs: { passthrough: true } }`)
+      lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+      lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+      lines.push(`${pad}}`)
+      return
+    }
+    throw new Error(`internal: no emitter for node ${node.id} (${kind})`)
+  }
+
+  /** Emit one container (iteration / loop) and its child sub-graph. */
+  const emitContainer = (node, unit, guard, level) => {
+    const data = node.data ?? {}
+    const pad = indentOf(level)
+    const container = ir.containers.get(node.id)
+    const index = counters.container
+    counters.container += 1
+    const itemsVar = `__items${index}`
+    const outVar = `__out${index}`
+    const ranVar = `__ranIt${index}`
+    const branchVar = `__branchIt${index}`
+    const idxVar = `__idxIt${index}`
+    const itemVar = `__itemIt${index}`
+    const errorMode = String(data.error_handle_mode ?? 'terminated')
+    const continueOnError = errorMode !== 'terminated'
+    const removeAbnormal = errorMode === 'remove-abnormal-output'
+    const isParallel = data.is_parallel === true && node.kind === 'iteration'
+    const maxParallel = Math.max(1, Math.min(64, Number(data.parallel_nums ?? 10) || 10))
+    const variable = scope.varByNode.get(node.id)
+
+    const childIds = (container?.children ?? []).map((child) => child.id)
+    const childNodes = (container?.children ?? [])
+    // Fresh result vars for the body; declared inside the loop body so each item
+    // starts clean and untaken branches stay `undefined`.
+    const childVars = new Map()
+    childNodes.forEach((child, childIndex) => {
+      if (START_MARKERS.has(child.kind)) return
+      childVars.set(child.id, `__i${index}_${childIndex}`)
+    })
+    const innerScope = {
+      startId: ir.startId,
+      varByNode: new Map([...scope.varByNode, ...childVars]),
+      locals: new Map(scope.locals),
+      ran: ranVar,
+      branch: branchVar,
+      nodes: '__nodes',
+      indent: level + 2,
+    }
+    // Container-local bindings: `item` / `index` for iteration-start/loop-start.
+    const marker = childNodes.find((child) => child.kind === `${node.kind}-start`)
+    let markerId = container?.startId ?? marker?.id
+    if (markerId === undefined) {
+      const entryIncoming = adjacency(childIds, container?.innerEdges ?? []).incoming
+      markerId = childNodes.find((child) => (entryIncoming.get(child.id) ?? []).length === 0)?.id
+    }
+    if (markerId !== undefined) {
+      innerScope.locals.set(String(markerId), { item: itemVar, index: idxVar })
+      // Some exports reference the container id for the current item.
+      innerScope.locals.set(String(node.id), { item: itemVar, index: idxVar })
+    }
+    const bodyUnit = {
+      nodes: childNodes,
+      edges: container?.innerEdges ?? [],
+      entryId: markerId,
+    }
+    bodyUnit.order = container !== undefined
+      ? orderNodes(childNodes, bodyUnit.edges, (id) => childIds.indexOf(id))
+      : []
+    const bodyIncoming = adjacency(childIds, bodyUnit.edges).incoming
+
+    // The per-item output expression: iteration output_selector, else the
+    // container end marker's collected value, else the last child's outputs.
+    let outputExpr
+    const outSelector = data.output_selector
+    if (Array.isArray(outSelector) && outSelector.length === 2) {
+      outputExpr = selectorExpr(outSelector, innerScope)
+    } else if (container?.endId !== undefined) {
+      outputExpr = `${childVars.get(container.endId)}?.outputs`
+    } else {
+      const last = [...bodyUnit.order].reverse().find((id) => childVars.has(id))
+      outputExpr = last === undefined ? 'null' : `${childVars.get(last)}?.outputs`
+    }
+
+    const emitBody = (bodyLevel) => {
+      const previousScope = { ...scope }
+      // Temporarily switch the closure scope for child emission.
+      Object.assign(scope, innerScope, { indent: bodyLevel })
+      for (const id of bodyUnit.order) {
+        const child = ir.byId.get(id)
+        if (child === undefined) continue
+        if (child.kind === `${node.kind}-start`) {
+          lines.push(`${indentOf(bodyLevel)}if (${idxVar} >= 0) { ${innerScope.ran}[${JSON.stringify(id)}] = true }`)
+          continue
+        }
+        if (child.kind === `${node.kind}-end`) {
+          const collect = data.output_type === 'array' ? '{}' : '{}'
+          const declared = Array.isArray(child.data?.outputs) ? child.data.outputs : []
+          const entries = declared.map((out, outIndex) => {
+            const expr = selectorExpr(out.value_selector, innerScope)
+            return `${JSON.stringify(out.variable ?? `output_${outIndex}`)}: (${expr} === undefined ? null : ${expr})`
+          })
+          lines.push(`${indentOf(bodyLevel)}${childVars.get(id)} = { ok: true, kind: ${JSON.stringify(child.kind)}, title: ${JSON.stringify(child.title)}, outputs: ${entries.length > 0 ? `{${entries.join(', ')}}` : collect} }`)
+          lines.push(`${indentOf(bodyLevel)}${scope.nodes}[${JSON.stringify(id)}] = ${childVars.get(id)}`)
+          lines.push(`${indentOf(bodyLevel)}${innerScope.ran}[${JSON.stringify(id)}] = true`)
+          continue
+        }
+        const childGuard = guardFor(child, bodyUnit, bodyIncoming)
+        if (HOST_KINDS.has(child.kind)) emitHost(child, bodyUnit, childGuard, bodyLevel)
+        else emitPure(child, bodyUnit, childGuard, bodyLevel)
+      }
+      Object.assign(scope, previousScope)
+    }
+
+    lines.push(`${pad}if (${guard}) {`)
+    const iterExpr = node.kind === 'loop'
+      ? (() => {
+          const explicitCount = Number(data.loop_count ?? 1)
+          const selector = data.loop_count_selector
+          const countExpr = Array.isArray(selector) ? `__num(${selectorExpr(selector, scope)})` : String(Number.isFinite(explicitCount) ? explicitCount : 1)
+          return `(() => { const n = ${countExpr}; return new Array(n === undefined ? 0 : Math.max(0, Math.min(100, n))).fill(0) })()`
+        })()
+      : `(() => { const v = ${Array.isArray(data.iterator_selector) ? selectorExpr(data.iterator_selector, scope) : '[]'}; return Array.isArray(v) ? v : v === undefined || v === null ? [] : [v] })()`
+    lines.push(`${pad}  const ${itemsVar} = ${iterExpr}`)
+    lines.push(`${pad}  const ${outVar} = []`)
+    lines.push(`${pad}  const ${ranVar} = {}`)
+    lines.push(`${pad}  const ${branchVar} = {}`)
+
+    if (isParallel) {
+      lines.push(`${pad}  const __parallel${index} = await parallel(${itemsVar}.map((${itemVar}, ${idxVar}) => async () => {`)
+      lines.push(`${pad}    try {`)
+      emitBody(level + 3)
+      lines.push(`${pad}      const __v = ${outputExpr}`)
+      lines.push(`${pad}      return { ok: true, value: __v === undefined ? null : __v }`)
+      lines.push(`${pad}    } catch (__e) {`)
+      lines.push(`${pad}      return { ok: false, error: String(__e && __e.message || __e) }`)
+      lines.push(`${pad}    }`)
+      lines.push(`${pad}  }))`)
+      lines.push(`${pad}  for (const __item of __parallel${index}) {`)
+      lines.push(`${pad}    if (__item === null || __item.ok !== true) {`)
+      if (continueOnError) {
+        lines.push(`${pad}      if (!${JSON.stringify(removeAbnormal)}) ${outVar}.push(null)`)
+      } else {
+        lines.push(`${pad}      throw new Error('iteration ${node.id} item failed: ' + ((__item && __item.error) || 'unknown error'))`)
+      }
+      lines.push(`${pad}    } else {`)
+      lines.push(`${pad}      ${outVar}.push(__item.value)`)
+      lines.push(`${pad}    }`)
+      lines.push(`${pad}  }`)
+    } else {
+      const count = node.kind === 'loop' ? `${itemsVar}.length` : `${itemsVar}.length`
+      lines.push(`${pad}  for (let ${idxVar} = 0; ${idxVar} < ${count}; ${idxVar}++) {`)
+      lines.push(`${pad}    const ${itemVar} = ${node.kind === 'loop' ? idxVar : `${itemsVar}[${idxVar}]`}`)
+      if (continueOnError) {
+        lines.push(`${pad}    let __itemFailed = false`)
+        lines.push(`${pad}    let __itemValue = null`)
+        lines.push(`${pad}    try {`)
+        emitBody(level + 3)
+        lines.push(`${pad}      const __v = ${outputExpr}`)
+        lines.push(`${pad}      __itemValue = __v === undefined ? null : __v`)
+        lines.push(`${pad}    } catch (__e) {`)
+        lines.push(`${pad}      __itemFailed = true`)
+        lines.push(`${pad}      if (!${JSON.stringify(removeAbnormal)}) ${outVar}.push(null)`)
+        lines.push(`${pad}    }`)
+        lines.push(`${pad}    if (!__itemFailed) ${outVar}.push(__itemValue)`)
+      } else {
+        emitBody(level + 2)
+        lines.push(`${pad}    const __v = ${outputExpr}`)
+        lines.push(`${pad}    ${outVar}.push(__v === undefined ? null : __v)`)
+      }
+      if (node.kind === 'loop' && Array.isArray(data.break_conditions) && data.break_conditions.length > 0) {
+        const logic = String(data.logical_operator ?? 'and').toLowerCase()
+        const conds = data.break_conditions.map((condition) => conditionExpr(condition, innerScope))
+        lines.push(`${pad}    if (${logic === 'or' ? conds.join(' || ') : conds.join(' && ')}) break`)
+      }
+      lines.push(`${pad}  }`)
+    }
+
+    lines.push(`${pad}  ${variable} = { ok: true, kind: ${JSON.stringify(node.kind)}, title: ${JSON.stringify(node.title)}, outputs: { output: ${outVar}, length: ${outVar}.length } }`)
+    lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
+    lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
+    lines.push(`${pad}}`)
+  }
+
+  /** Emit the top-level unit. */
+  const unit = {
+    nodes: ir.topNodes,
+    edges: ir.topEdges,
+    entryId: ir.entryId,
+  }
+  unit.order = topOrder
+  const topIncoming = adjacency(ir.topNodes.map((node) => node.id), ir.topEdges).incoming
+
+  const end = ir.topNodes.find((node) => node.kind === 'end')
+  for (const id of unit.order) {
+    const node = ir.byId.get(id)
+    if (node === undefined) continue
+    if (node.kind === 'start') {
+      lines.push(`${scope.ran}[${JSON.stringify(id)}] = true`)
+      continue
+    }
+    if (node.kind === 'end') continue
+    if (CONTAINER_KINDS.has(node.kind)) {
+      emitContainer(node, unit, guardFor(node, unit, topIncoming), 0)
+    } else {
+      const guard = guardFor(node, unit, topIncoming)
+      if (HOST_KINDS.has(node.kind)) emitHost(node, unit, guard, 0)
+      else emitPure(node, unit, guard, 0)
+    }
+    nodeMeta.push({ id, type: node.kind, title: node.title, variable: scope.varByNode.get(id) })
+  }
+
+  const entries = (end?.data?.outputs ?? []).map((out, i) => {
+    const expr = selectorExpr(out.value_selector, scope)
     const key = JSON.stringify(out.variable ?? `output_${i}`)
     return `${key}: (${expr} === undefined ? null : ${expr})`
   })
+  const answers = ir.topNodes.filter((node) => node.kind === 'answer')
   lines.push(`const __outputs = {${entries.join(', ')}}`)
-  lines.push('return { nodes: __nodes, outputs: __outputs }')
+  lines.push(`const __answer = __answers.length > 0 ? __answers.join('\\n\\n') : ''`)
+  lines.push(`if (__answers.length > 0 && __outputs.answer === undefined) __outputs.answer = __answer`)
+  lines.push('return { nodes: __nodes, outputs: __outputs, answers: __answers }')
 
   return {
     script: lines.join('\n'),
     meta: {
       name: `dify-${(parsed.appName || 'workflow').replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()}`,
-      description: `Compiled Dify workflow ${parsed.appName || ''} (${order.length} nodes)`,
+      description: `Compiled Dify workflow ${parsed.appName || ''} (${unit.order.length} top-level nodes)`,
       phases: [{ title: `dify:${parsed.appName || 'workflow'}` }],
     },
-    order,
+    ir,
+    order: unit.order,
     startInputs: inspection.startInputs,
     requiredInputs: inspection.requiredInputs,
     endOutputs: inspection.endOutputs,
+    answerCount: inspection.answerCount,
     nodes: nodeMeta,
     inspection,
   }

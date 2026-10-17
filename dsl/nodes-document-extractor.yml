@@ -1,0 +1,30 @@
+app:
+  name: nodes-document-extractor
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: s
+        type: custom
+        data:
+          type: start
+          title: 开始
+          variables:
+            - { variable: doc, label: 文档, type: file, required: true }
+      - id: ext
+        type: custom
+        data:
+          type: document-extractor
+          title: 文档提取器
+          variable_selector: [s, doc]
+          is_array_file: false
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: text, value_selector: [ext, text] }
+    edges:
+      - { source: s, target: ext, sourceHandle: source }
+      - { source: ext, target: e, sourceHandle: source }

@@ -6,20 +6,24 @@
  * subagent provider is fixed per run, so this provider receives one JSON node
  * request per call and dispatches by `kind`:
  *
- *   code     → ctx.sandbox.confine (landlock/bwrap); Python trampoline child
- *   llm      → ctx.llm.stream (the harness's own provider-neutral LLM service)
- *   if-else  → local condition evaluation, no host capability needed
+ *   code                 → ctx.sandbox.confine (landlock/bwrap); Python trampoline child
+ *   llm                  → ctx.llm.stream (the harness's own provider-neutral LLM service)
+ *   if-else              → local condition evaluation, no host capability needed
+ *   question-classifier  → ctx.llm.stream; the answer maps back to a declared class id
+ *   http-request         → ctx.web.fetch for plain GET; otherwise ctx.sandbox.confine + curl
+ *   tool                 → ctx.tools.execute on an allowlisted harness tool
+ *   knowledge-retrieval  → ctx.tools.execute('grep') over a local dataset directory
  *
- * No process isolation, no LLM adapter, and no scheduler live here: this is a
- * capability provider for the documented subagent seam. Model routing never
- * invents an HTTP client; it picks a route the mounted `llm` service actually
- * exposes (falling back to the profile's default model when the DSL names a
- * provider this deployment does not have, e.g. `deepseek/deepseek-chat`).
+ * No process isolation, no LLM adapter, no HTTP client, and no scheduler live
+ * here: this is a capability provider for the documented subagent seam. Model
+ * routing never invents an HTTP client; it picks a route the mounted `llm`
+ * service actually exposes (falling back to the profile's default model when
+ * the DSL names a provider this deployment does not have).
  */
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { basename, isAbsolute, join } from 'node:path'
 
 /** The Python trampoline: define Dify's `main`, feed it the node inputs, emit JSON. */
 const PY_WRAPPER = `
@@ -118,6 +122,9 @@ export function createDifyNodeProvider(ctx, options = {}) {
   const pythonPath = options.pythonPath ?? process.env.DIFY_PYTHONPATH ?? ''
   const llmProvider = options.llmProvider ?? process.env.DIFY_LLM_PROVIDER ?? ''
   const llmModel = options.llmModel ?? process.env.DIFY_LLM_MODEL ?? ''
+  const knowledgeRoot = options.knowledgeRoot ?? process.env.DIFY_KNOWLEDGE_ROOT ?? ''
+  const documentRoot = options.documentRoot ?? process.env.DIFY_DOCUMENT_ROOT ?? ''
+  const toolAllow = options.toolAllow ?? process.env.DIFY_TOOL_ALLOW ?? 'web_search,web_fetch'
 
   return {
     name: options.name ?? 'dify-node',
@@ -151,7 +158,15 @@ export function createDifyNodeProvider(ctx, options = {}) {
         }
         let payload
         try {
-          payload = await executeSpec(ctx, spec, request, { python, pythonPath, llmProvider, llmModel })
+          payload = await executeSpec(ctx, spec, request, {
+            python,
+            pythonPath,
+            llmProvider,
+            llmModel,
+            knowledgeRoot,
+            documentRoot,
+            toolAllow,
+          })
         } catch (error) {
           payload = { ok: false, error: `${error?.name ?? 'Error'}: ${error?.message ?? String(error)}` }
         }
@@ -180,6 +195,16 @@ async function executeSpec(ctx, spec, request, env) {
   if (spec.kind === 'code') return executeCode(ctx, spec, request, env)
   if (spec.kind === 'llm') return executeLlm(ctx, spec, request, env)
   if (spec.kind === 'if-else') return executeIfElse(spec)
+  if (spec.kind === 'question-classifier') return executeClassifier(ctx, spec, request, env)
+  if (spec.kind === 'http-request') return executeHttp(ctx, spec, request, env)
+  if (spec.kind === 'tool') return executeTool(ctx, spec, request, env)
+  if (spec.kind === 'knowledge-retrieval') return executeKnowledge(ctx, spec, request, env)
+  if (spec.kind === 'agent') return executeAgent(ctx, spec, request, env)
+  if (spec.kind === 'parameter-extractor') return executeParameterExtractor(ctx, spec, request, env)
+  if (spec.kind === 'document-extractor') return executeDocumentExtractor(ctx, spec, request, env)
+  if (spec.kind === 'datasource') return executeDatasource(ctx, spec, request, env)
+  if (spec.kind === 'knowledge-index') return executeKnowledgeIndex(ctx, spec, request, env)
+  if (spec.kind === 'human-input') return executeHumanInput(spec)
   return { ok: false, error: `unsupported node kind "${spec.kind}"` }
 }
 
@@ -189,9 +214,15 @@ async function executeCode(ctx, spec, request, env) {
   if (sandbox === undefined || typeof sandbox.confine !== 'function') {
     return { ok: false, error: 'ctx.sandbox is unavailable; refusing to run the code node unconfined' }
   }
-  const language = spec.codeLanguage ?? 'python3'
-  if (language !== 'python3' && language !== 'python') {
-    return { ok: false, error: `unsupported code_language "${language}" (v1 supports python3)` }
+  const language = String(spec.codeLanguage ?? 'python3').toLowerCase()
+  const isPython = language === 'python3' || language === 'python'
+  const isJavaScript = language === 'javascript' || language === 'nodejs' || language === 'js'
+  if (!isPython && !isJavaScript) {
+    // Parse-level support is unconditional; this is the honest execution limit.
+    return {
+      ok: false,
+      error: `code_language "${language}" is parsed and scheduled, but this runtime executes only python3 and javascript`,
+    }
   }
   const workspaceRoot = spec.workspaceRoot ?? request.parent?.session?.header?.cwd ?? process.cwd()
   if (!existsSync(workspaceRoot)) return { ok: false, error: `workspace root does not exist: ${workspaceRoot}` }
@@ -200,9 +231,12 @@ async function executeCode(ctx, spec, request, env) {
     workspaceRoot,
     ...(request.parent?.session?.id !== undefined ? { sessionId: request.parent.session.id } : {}),
   }
+  const argv = isPython
+    ? [env.python, '-c', PY_WRAPPER]
+    : ['node', '-e', jsProgram(String(spec.code ?? ''))]
   let confined
   try {
-    confined = await sandbox.confine([env.python, '-c', PY_WRAPPER], policy)
+    confined = await sandbox.confine(argv, policy)
   } catch (error) {
     return { ok: false, error: `sandbox refused the code node (${error?.code ?? error?.name ?? 'error'}): ${error?.message ?? String(error)}` }
   }
@@ -216,7 +250,7 @@ async function executeCode(ctx, spec, request, env) {
     timeoutMs: Number(spec.timeoutMs ?? 120_000),
     signal: request.signal,
   })
-  if (proc.spawnError) return { ok: false, error: `cannot start confined python: ${proc.spawnError}` }
+  if (proc.spawnError) return { ok: false, error: `cannot start confined ${isPython ? 'python' : 'node'}: ${proc.spawnError}` }
   if (proc.timedOut) return { ok: false, error: `code node timed out after ${spec.timeoutMs}ms` }
   if (proc.aborted) return { ok: false, error: 'code node cancelled' }
   let parsed
@@ -273,39 +307,20 @@ function resolveRoute(ctx, spec, env) {
   throw new Error('no usable LLM route: the DSL names no model and the profile exposes no default')
 }
 
-/** Call one Dify LLM node through the harness LLM service. */
-async function executeLlm(ctx, spec, request, env) {
+/**
+ * Run one model call through the harness LLM service and collect its text.
+ * Shared by the `llm` and `question-classifier` nodes so routing, usage, and
+ * failure handling have one implementation.
+ */
+async function streamLlm(ctx, request, route, { messages, system, temperature, maxTokens, note }) {
   const llm = ctx.get('llm')
-  const route = resolveRoute(ctx, spec, env)
-  const prompt = Array.isArray(spec.prompt) ? spec.prompt : []
-  const system = prompt
-    .filter((item) => item.role === 'system')
-    .map((item) => String(item.text ?? ''))
-    .filter((text) => text.length > 0)
-    .join('\n\n')
-  const messages = prompt
-    .filter((item) => item.role !== 'system')
-    .map((item) => ({
-      role: item.role === 'assistant' ? 'assistant' : 'user',
-      content: [{ type: 'text', text: String(item.text ?? '') }],
-    }))
-  let note
-  if (messages.length === 0) {
-    // Dify allows a system-only prompt; some OpenAI-compatible gateways reject
-    // a request whose only turn is `system`, so add a neutral user turn.
-    messages.push({
-      role: 'user',
-      content: [{ type: 'text', text: 'Follow the system instruction and produce the requested output.' }],
-    })
-    note = 'added neutral user turn for system-only prompt'
-  }
   const options = {
     provider: route.provider,
     model: route.model,
     messages,
-    ...(system.length > 0 ? { system } : {}),
-    ...(typeof spec.temperature === 'number' ? { temperature: spec.temperature } : {}),
-    ...(typeof spec.maxTokens === 'number' ? { maxTokens: spec.maxTokens } : {}),
+    ...(typeof system === 'string' && system.length > 0 ? { system } : {}),
+    ...(typeof temperature === 'number' ? { temperature } : {}),
+    ...(typeof maxTokens === 'number' ? { maxTokens } : {}),
     ...(request.parent?.session?.id !== undefined ? { sessionId: request.parent.session.id } : {}),
     ...(request.signal !== undefined ? { signal: request.signal } : {}),
   }
@@ -332,21 +347,164 @@ async function executeLlm(ctx, spec, request, env) {
     }
   }
   if (finish?.kind === 'error' || finish?.kind === 'aborted') {
-    return { ok: false, error: `llm node ${spec.nodeId} ${finish.kind}: ${finish.failure?.message ?? 'model call failed'}` }
+    return { ok: false, error: `model call ${finish.kind}: ${finish.failure?.message ?? 'model call failed'}` }
   }
-  if (text.length === 0 && reasoning.length === 0) {
+  return { ok: true, text, reasoning, usage: usage ?? {}, finish: finish?.kind ?? 'stop', note }
+}
+
+/** Call one Dify LLM node through the harness LLM service. */
+async function executeLlm(ctx, spec, request, env) {
+  const route = resolveRoute(ctx, spec, env)
+  const prompt = Array.isArray(spec.prompt) ? spec.prompt : []
+  const system = prompt
+    .filter((item) => item.role === 'system')
+    .map((item) => String(item.text ?? ''))
+    .filter((text) => text.length > 0)
+    .join('\n\n')
+  const messages = prompt
+    .filter((item) => item.role !== 'system')
+    .map((item) => ({
+      role: item.role === 'assistant' ? 'assistant' : 'user',
+      content: [{ type: 'text', text: String(item.text ?? '') }],
+    }))
+  let note
+  if (messages.length === 0) {
+    // Dify allows a system-only prompt; some OpenAI-compatible gateways reject
+    // a request whose only turn is `system`, so add a neutral user turn.
+    messages.push({
+      role: 'user',
+      content: [{ type: 'text', text: 'Follow the system instruction and produce the requested output.' }],
+    })
+    note = 'added neutral user turn for system-only prompt'
+  }
+  const call = await streamLlm(ctx, request, route, {
+    messages,
+    system,
+    temperature: spec.temperature,
+    maxTokens: spec.maxTokens,
+    note,
+  })
+  if (!call.ok) return { ok: false, error: `llm node ${spec.nodeId} ${call.error}` }
+  if (call.text.length === 0 && call.reasoning.length === 0) {
     return { ok: false, error: `llm node ${spec.nodeId} produced no text (route ${route.provider}/${route.model})` }
   }
   return {
     ok: true,
-    outputs: { text, usage: usage ?? {}, reasoning_content: reasoning },
+    outputs: { text: call.text, usage: call.usage, reasoning_content: call.reasoning },
     meta: {
       provider: route.provider,
       model: route.model,
       requested: spec.provider && spec.model ? `${spec.provider}/${spec.model}` : '',
       routeSource: route.source,
-      finish: finish?.kind ?? 'stop',
-      ...(note !== undefined ? { adapterNote: note } : {}),
+      finish: call.finish,
+      ...(call.note !== undefined ? { adapterNote: call.note } : {}),
+    },
+  }
+}
+
+/**
+ * Dify question-classifier: ask the model for one declared class name, then let
+ * THIS code map the answer back to the class id that names the outgoing edge.
+ * The model never picks an edge; an unknown or ambiguous answer fails closed.
+ */
+async function executeClassifier(ctx, spec, request, env) {
+  const classes = (Array.isArray(spec.classes) ? spec.classes : [])
+    .map((item, index) => ({
+      id: String(item?.id ?? item?.name ?? index),
+      name: String(item?.name ?? ''),
+    }))
+    .filter((item) => item.name.length > 0)
+  if (classes.length === 0) return { ok: false, error: `question-classifier ${spec.nodeId} has no classes` }
+  const route = resolveRoute(ctx, spec, env)
+  const query = stringify(spec.query)
+  const instruction = String(spec.instruction ?? '').trim() || 'Classify the input into exactly one class.'
+  const prompt = [
+    instruction,
+    '',
+    'Classes:',
+    ...classes.map((item, index) => `${index + 1}. ${item.name}`),
+    '',
+    'Input:',
+    query,
+    '',
+    'Reply with exactly one class name from the list, copied verbatim. No explanation, no quotes, no extra text.',
+  ].join('\n')
+  const call = await streamLlm(ctx, request, route, {
+    messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+    temperature: typeof spec.temperature === 'number' ? spec.temperature : 0,
+    maxTokens: typeof spec.maxTokens === 'number' ? spec.maxTokens : 128,
+  })
+  if (!call.ok) return { ok: false, error: `question-classifier ${spec.nodeId} ${call.error}` }
+  const raw = call.text.trim()
+  if (raw.length === 0) return { ok: false, error: `question-classifier ${spec.nodeId} produced no text` }
+  let cleaned = raw.replace(/^```(?:json|text)?\s*/i, '').replace(/```$/i, '').trim()
+  cleaned = cleaned.replace(/^["'“”]+|["'“”]+$/g, '').trim()
+  let fromJson
+  try {
+    const parsed = JSON.parse(cleaned)
+    if (parsed != null && typeof parsed === 'object') {
+      fromJson = parsed.class ?? parsed.class_name ?? parsed.label ?? parsed.name ?? parsed.id
+    }
+  } catch {
+    fromJson = undefined
+  }
+  const candidates = [cleaned, fromJson == null ? undefined : String(fromJson).trim()].filter(
+    (value) => typeof value === 'string' && value.length > 0,
+  )
+  let matches = []
+  for (const candidate of candidates) {
+    const exact = classes.filter(
+      (item) => item.name.toLowerCase() === candidate.toLowerCase() || item.id.toLowerCase() === candidate.toLowerCase(),
+    )
+    if (exact.length > 0) {
+      matches = exact
+      break
+    }
+  }
+  if (matches.length === 0) {
+    for (const candidate of candidates) {
+      const numeric = /^(?:class\s*)?(\d+)(?:[.、)]|\s|$)/i.exec(candidate)
+      if (numeric !== null) {
+        const index = Number(numeric[1]) - 1
+        if (index >= 0 && index < classes.length) {
+          matches = [classes[index]]
+          break
+        }
+      }
+    }
+  }
+  if (matches.length === 0) {
+    for (const candidate of candidates) {
+      const lower = candidate.toLowerCase()
+      const contained = classes.filter((item) => lower.includes(item.name.toLowerCase()) || item.name.toLowerCase().includes(lower))
+      if (contained.length === 1) {
+        matches = contained
+        break
+      }
+      if (contained.length > 1) {
+        return {
+          ok: false,
+          error: `question-classifier ${spec.nodeId} answer "${raw}" is ambiguous (${contained.map((c) => c.name).join(', ')})`,
+        }
+      }
+    }
+  }
+  if (matches.length !== 1) {
+    return {
+      ok: false,
+      error: `question-classifier ${spec.nodeId} answer "${raw}" matches no declared class (${classes.map((c) => c.name).join(', ')})`,
+    }
+  }
+  const match = matches[0]
+  return {
+    ok: true,
+    outputs: { class_name: match.name, class_id: match.id, raw },
+    meta: {
+      provider: route.provider,
+      model: route.model,
+      requested: spec.provider && spec.model ? `${spec.provider}/${spec.model}` : '',
+      routeSource: route.source,
+      classes: classes.map((c) => c.name),
     },
   }
 }
@@ -440,6 +598,889 @@ function executeIfElse(spec) {
     return { ok: true, outputs: { result: 'false' } }
   } catch (error) {
     return { ok: false, error: `${error?.name ?? 'Error'}: ${error?.message ?? String(error)}` }
+  }
+}
+
+/** Build the request URL and append Dify's query parameters. */
+function httpRequestUrl(spec) {
+  let url
+  try {
+    url = new URL(String(spec.url ?? ''))
+  } catch {
+    throw new Error(`invalid http-request url ${JSON.stringify(spec.url ?? '')}`)
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`http-request only allows http(s), got ${url.protocol}`)
+  }
+  for (const pair of spec.params ?? []) {
+    if (Array.isArray(pair) && pair.length >= 1) url.searchParams.append(String(pair[0]), stringify(pair[1]))
+  }
+  return url
+}
+
+function hasHeader(headers, name) {
+  const lower = name.toLowerCase()
+  return [...headers.keys()].some((key) => key.toLowerCase() === lower)
+}
+
+/** Apply Dify's auth block to the outgoing header map. */
+function applyHttpAuth(spec, headers) {
+  const auth = spec.authorization ?? { type: 'no-auth' }
+  const type = String(auth.type ?? 'no-auth')
+  if (type === 'api-key') {
+    const cfg = auth.config ?? {}
+    const key = stringify(cfg.api_key)
+    if (key.length === 0) return
+    const header = String(cfg.header ?? 'Authorization')
+    const bearer = String(cfg.type ?? 'bearer') === 'bearer'
+    headers.set(header, bearer && !/^Bearer\s/i.test(key) ? `Bearer ${key}` : key)
+  } else if (type === 'bearer') {
+    const token = stringify(auth.config?.token)
+    if (token.length > 0) headers.set('Authorization', /^Bearer\s/i.test(token) ? token : `Bearer ${token}`)
+  }
+}
+
+/** Dify HTTP body block → the exact bytes curl should send. */
+function httpPayload(spec, headers) {
+  const body = spec.body ?? { type: 'none' }
+  if (body.type === 'none') return undefined
+  if (body.type === 'json') {
+    let value
+    if (Array.isArray(body.data)) {
+      value = {}
+      for (const item of body.data) value[String(item.key)] = item.value
+    } else if (typeof body.raw === 'string') {
+      try {
+        value = JSON.parse(body.raw)
+      } catch {
+        throw new Error('http-request json body is not valid JSON after reference rendering')
+      }
+    } else {
+      value = body.value ?? {}
+    }
+    if (!hasHeader(headers, 'content-type')) headers.set('Content-Type', 'application/json')
+    return JSON.stringify(value)
+  }
+  if (body.type === 'raw-text') {
+    if (!hasHeader(headers, 'content-type')) headers.set('Content-Type', 'text/plain; charset=utf-8')
+    return stringify(body.data)
+  }
+  if (body.type === 'x-www-form-urlencoded') {
+    const form = new URLSearchParams()
+    for (const item of body.data ?? []) form.append(String(item.key), stringify(item.value))
+    if (!hasHeader(headers, 'content-type')) headers.set('Content-Type', 'application/x-www-form-urlencoded')
+    return form.toString()
+  }
+  throw new Error(`unsupported http-request body type "${body.type}"`)
+}
+
+/** Parse the last response block curl wrote with --dump-header. */
+function parseCurlHeaders(text) {
+  const blocks = String(text ?? '')
+    .split(/\r?\n\r?\n/)
+    .filter((block) => block.trim().length > 0)
+  const block = blocks.at(-1) ?? ''
+  const headers = {}
+  for (const line of block.split(/\r?\n/)) {
+    if (/^HTTP\//i.test(line)) continue
+    const colon = line.indexOf(':')
+    if (colon <= 0) continue
+    headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim()
+  }
+  return headers
+}
+
+function parseJsonBody(text) {
+  if (typeof text !== 'string' || text.trim().length === 0) return undefined
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+/** One HTTP outcome, honoring Dify's error strategy and branch handle. */
+function httpOutcome(spec, { status, headers, text, backend, url }) {
+  const strategy = String(spec.errorStrategy ?? 'none')
+  const json = parseJsonBody(text)
+  const outputs = {
+    body: text,
+    json,
+    status_code: status,
+    headers,
+    text,
+    url,
+    backend,
+  }
+  if (status >= 400) {
+    const error = `http node ${spec.nodeId} got HTTP ${status}: ${text.slice(0, 300)}`
+    const errorOutputs = { ...outputs, error, error_type: 'http_error', error_message: error }
+    if (strategy === 'fail-branch') return { ok: true, branch: 'fail-branch', outputs: errorOutputs }
+    if (strategy === 'default-value') {
+      return {
+        ok: true,
+        outputs: { ...(spec.defaultValue ?? {}), error, error_type: 'http_error', error_message: error },
+        meta: { defaulted: true, actualStatus: status },
+      }
+    }
+    return { ok: false, error, outputs: errorOutputs }
+  }
+  return { ok: true, ...(strategy === 'fail-branch' ? { branch: 'success-branch' } : {}), outputs }
+}
+
+/** One HTTP failure (network, timeout, sandbox refusal), honoring the strategy. */
+function httpFailure(spec, message, errorType = 'network_error') {
+  const strategy = String(spec.errorStrategy ?? 'none')
+  if (strategy === 'fail-branch') {
+    return {
+      ok: true,
+      branch: 'fail-branch',
+      outputs: {
+        body: '',
+        json: undefined,
+        status_code: 0,
+        headers: {},
+        text: '',
+        error: message,
+        error_type: errorType,
+        error_message: message,
+      },
+    }
+  }
+  if (strategy === 'default-value') {
+    return {
+      ok: true,
+      outputs: { ...(spec.defaultValue ?? {}), error: message, error_type: errorType, error_message: message },
+      meta: { defaulted: true },
+    }
+  }
+  return { ok: false, error: message }
+}
+
+/**
+ * Dify's HTTP request node.
+ *
+ * A plain GET with no custom headers is delegated to `ctx.web.fetch` — the
+ * harness's existing web seam. Everything else (POST/PUT/PATCH/DELETE, custom
+ * headers, bodies, auth) is delegated to `ctx.sandbox.confine` + the system
+ * `curl`, so this plugin still owns no HTTP client.
+ */
+async function executeHttp(ctx, spec, request, env) {
+  let url
+  try {
+    url = httpRequestUrl(spec)
+  } catch (error) {
+    return httpFailure(spec, String(error?.message ?? error))
+  }
+  const method = String(spec.method ?? 'GET').toUpperCase()
+  const headers = new Map()
+  for (const pair of spec.headers ?? []) {
+    if (!Array.isArray(pair) || pair.length < 1) continue
+    const name = String(pair[0])
+    const value = stringify(pair[1])
+    if (/[\r\n]/.test(name) || /[\r\n]/.test(value)) return httpFailure(spec, `http-request header "${name}" contains a newline`)
+    headers.set(name, value)
+  }
+  try {
+    applyHttpAuth(spec, headers)
+  } catch (error) {
+    return httpFailure(spec, String(error?.message ?? error))
+  }
+  const body = spec.body ?? { type: 'none' }
+  const hasBody = body.type !== 'none'
+  const web = typeof ctx.get === 'function' ? ctx.get('web') : undefined
+  if (
+    (method === 'GET' || method === 'HEAD') &&
+    !hasBody &&
+    headers.size === 0 &&
+    web !== undefined &&
+    typeof web.fetch === 'function'
+  ) {
+    try {
+      const result = await web.fetch({ url: url.toString() }, request.signal)
+      const text = String(result.body?.content ?? '')
+      return httpOutcome(spec, {
+        status: Number(result.statusCode ?? 0),
+        headers: {},
+        text,
+        backend: 'ctx.web.fetch',
+        url: result.url ?? url.toString(),
+      })
+    } catch (error) {
+      return httpFailure(spec, `http node ${spec.nodeId} ctx.web.fetch failed: ${error?.message ?? String(error)}`)
+    }
+  }
+  return executeHttpCurl(ctx, spec, request, { method, url, headers })
+}
+
+/** Run one HTTP request through the harness sandbox and the system curl. */
+async function executeHttpCurl(ctx, spec, request, { method, url, headers }) {
+  const sandbox = typeof ctx.get === 'function' ? ctx.get('sandbox') : undefined
+  if (sandbox === undefined || typeof sandbox.confine !== 'function') {
+    return httpFailure(spec, 'ctx.sandbox is unavailable; refusing to run http-request unconfined')
+  }
+  const workspaceRoot = spec.workspaceRoot ?? request.parent?.session?.header?.cwd ?? process.cwd()
+  if (!existsSync(workspaceRoot)) return httpFailure(spec, `http-request workspace root does not exist: ${workspaceRoot}`)
+  let payload
+  try {
+    payload = httpPayload(spec, headers)
+  } catch (error) {
+    return httpFailure(spec, String(error?.message ?? error))
+  }
+  let dir
+  try {
+    dir = mkdtempSync(join(workspaceRoot, '.dify-http-'))
+  } catch (error) {
+    return httpFailure(spec, `http-request cannot create a temporary directory: ${error?.message ?? String(error)}`)
+  }
+  const bodyPath = join(dir, 'body')
+  const headerPath = join(dir, 'headers')
+  try {
+    const timeoutMs = Number(spec.timeoutMs ?? 30_000)
+    const argv = [
+      'curl',
+      '--silent',
+      '--show-error',
+      '--location',
+      '--max-redirs',
+      '5',
+      '--max-time',
+      String(Math.max(1, Math.ceil(timeoutMs / 1000))),
+      '--proto',
+      '=http,https',
+      '--request',
+      method,
+      '--dump-header',
+      headerPath,
+      '--output',
+      bodyPath,
+      '--write-out',
+      '%{http_code}',
+    ]
+    for (const [name, value] of headers) argv.push('--header', `${name}: ${value}`)
+    if (payload !== undefined) argv.push('--data-binary', '@-')
+    argv.push(url.toString())
+    let confined
+    try {
+      confined = await sandbox.confine(argv, {
+        mode: 'workspace-write',
+        workspaceRoot,
+        ...(request.parent?.session?.id !== undefined ? { sessionId: request.parent.session.id } : {}),
+      })
+    } catch (error) {
+      return httpFailure(spec, `sandbox refused http-request (${error?.code ?? error?.name ?? 'error'}): ${error?.message ?? String(error)}`)
+    }
+    const proc = await runChild(confined.argv, {
+      cwd: workspaceRoot,
+      env: { ...process.env },
+      input: payload ?? '',
+      timeoutMs,
+      signal: request.signal,
+    })
+    if (proc.spawnError) return httpFailure(spec, `cannot start confined curl: ${proc.spawnError}`)
+    if (proc.timedOut) return httpFailure(spec, `http node ${spec.nodeId} timed out after ${timeoutMs}ms`, 'timeout')
+    if (proc.aborted) return httpFailure(spec, `http node ${spec.nodeId} cancelled`)
+    if (proc.code !== 0) {
+      return httpFailure(spec, `http node ${spec.nodeId} curl exited ${proc.code}: ${proc.stderr.slice(-500)}`)
+    }
+    const status = Number(String(proc.stdout).trim())
+    if (!Number.isFinite(status) || status <= 0) {
+      return httpFailure(spec, `http node ${spec.nodeId} produced no HTTP status: ${proc.stderr.slice(-500)}`)
+    }
+    const text = existsSync(bodyPath) ? readFileSync(bodyPath, 'utf8') : ''
+    const rawHeaders = existsSync(headerPath) ? readFileSync(headerPath, 'utf8') : ''
+    return httpOutcome(spec, {
+      status,
+      headers: parseCurlHeaders(rawHeaders),
+      text,
+      backend: 'sandbox+curl',
+      url: url.toString(),
+    })
+  } finally {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // best-effort cleanup
+    }
+  }
+}
+
+/** Dify tool names this runtime can serve from an existing harness tool. */
+const TOOL_ALIASES = {
+  jina_reader: 'web_fetch',
+  jina_search: 'web_search',
+  fetch: 'web_fetch',
+  search: 'web_search',
+}
+
+function toolAllowSet(env) {
+  return new Set(
+    String(env.toolAllow ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0),
+  )
+}
+
+/**
+ * Dify tool node: translate its provider/tool name to an existing harness tool
+ * and dispatch through `ctx.tools.execute`. The allowlist is the security
+ * boundary; an unlisted tool is refused before any call.
+ */
+async function executeTool(ctx, spec, request, env) {
+  const tools = typeof ctx.get === 'function' ? ctx.get('tools') : undefined
+  if (tools === undefined || typeof tools.execute !== 'function') {
+    return { ok: false, error: 'ctx.tools is unavailable; refusing to run the tool node' }
+  }
+  const requested = String(spec.toolName ?? '')
+  const mapped = TOOL_ALIASES[requested] ?? requested
+  const allow = toolAllowSet(env)
+  if (!allow.has('*') && !allow.has(mapped)) {
+    return {
+      ok: false,
+      error: `tool node ${spec.nodeId} refuses "${requested}" (mapped to "${mapped}"): allowlist is ${[...allow].join(', ') || '(empty)'}. Set DIFY_TOOL_ALLOW to opt in.`,
+    }
+  }
+  if (typeof tools.get === 'function' && tools.get(mapped) === undefined) {
+    return { ok: false, error: `tool node ${spec.nodeId}: harness tool "${mapped}" is not registered in this profile` }
+  }
+  const args = { ...(spec.arguments ?? {}) }
+  for (const [key, value] of Object.entries(args)) if (value === undefined) delete args[key]
+  let result
+  try {
+    result = await tools.execute({
+      callId: randomUUID(),
+      name: mapped,
+      arguments: args,
+      agent: request.parent,
+      signal: request.signal ?? new AbortController().signal,
+    })
+  } catch (error) {
+    return { ok: false, error: `tool node ${spec.nodeId} "${mapped}" failed: ${error?.message ?? String(error)}` }
+  }
+  if (result.isError) {
+    const text = (result.content ?? [])
+      .filter((block) => block?.type === 'text')
+      .map((block) => block.text)
+      .join('\n')
+    return { ok: false, error: `tool node ${spec.nodeId} "${mapped}" failed: ${text || result.error?.message || 'tool error'}` }
+  }
+  const text = (result.content ?? [])
+    .filter((block) => block?.type === 'text')
+    .map((block) => block.text)
+    .join('\n')
+  const value = result.value
+  const outputs = { text, result: text, json: value }
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    for (const [key, item] of Object.entries(value)) if (outputs[key] === undefined) outputs[key] = item
+    if (value.body?.content !== undefined && outputs.body === undefined) outputs.body = value.body.content
+  }
+  return {
+    ok: true,
+    outputs,
+    meta: { tool: mapped, requestedTool: requested, provider: spec.provider ?? '' },
+  }
+}
+
+/** Query terms for lexical retrieval; CJK runs also contribute bigrams. */
+function knowledgeTerms(query) {
+  const text = String(query ?? '')
+  const terms = new Set()
+  for (const token of text.split(/[^\p{L}\p{N}_]+/u)) {
+    if (token.length >= 2) terms.add(token)
+  }
+  for (const run of text.match(/[\u4e00-\u9fff]+/g) ?? []) {
+    if (run.length >= 2) terms.add(run)
+    for (let i = 0; i + 1 < run.length; i += 1) terms.add(run.slice(i, i + 2))
+  }
+  return [...terms]
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Dify knowledge-retrieval, minimally and honestly: a local dataset directory
+ * per `dataset_ids` entry, candidate lines found by the harness's existing
+ * `grep` tool, and deterministic lexical scoring in this adapter. This is not a
+ * vector/embedding RAG and does not read Dify's hosted datasets; a dataset id
+ * must resolve under `DIFY_KNOWLEDGE_ROOT`.
+ */
+async function executeKnowledge(ctx, spec, request, env) {
+  const tools = typeof ctx.get === 'function' ? ctx.get('tools') : undefined
+  if (tools === undefined || typeof tools.execute !== 'function') {
+    return { ok: false, error: 'ctx.tools is unavailable; refusing to run knowledge-retrieval' }
+  }
+  const workspaceRoot = spec.workspaceRoot ?? request.parent?.session?.header?.cwd ?? process.cwd()
+  const root = env.knowledgeRoot || process.env.DIFY_KNOWLEDGE_ROOT || join(workspaceRoot, 'knowledge')
+  const ids = Array.isArray(spec.datasetIds) ? spec.datasetIds.map(String) : []
+  const datasets = []
+  const missing = []
+  for (const id of ids) {
+    const candidate = isAbsolute(id) ? id : join(root, id)
+    if (existsSync(candidate)) datasets.push({ id, path: candidate })
+    else missing.push(id)
+  }
+  if (datasets.length === 0) {
+    return {
+      ok: false,
+      error: `knowledge-retrieval ${spec.nodeId}: dataset(s) ${missing.join(', ') || '(none)'} not found under ${root}. Set DIFY_KNOWLEDGE_ROOT or map dataset_ids to local directories.`,
+    }
+  }
+  const query = stringify(spec.query)
+  const terms = knowledgeTerms(query)
+  if (terms.length === 0) {
+    return { ok: true, outputs: { result: [], records: [], query, datasets: datasets.map((item) => item.id) }, meta: { note: 'empty query' } }
+  }
+  const pattern = `(?i)(${terms.map(escapeRegex).join('|')})`
+  const matches = []
+  for (const dataset of datasets) {
+    let result
+    try {
+      result = await tools.execute({
+        callId: randomUUID(),
+        name: 'grep',
+        arguments: { pattern, path: dataset.path },
+        agent: request.parent,
+        signal: request.signal ?? new AbortController().signal,
+      })
+    } catch (error) {
+      return { ok: false, error: `knowledge-retrieval ${spec.nodeId} grep failed: ${error?.message ?? String(error)}` }
+    }
+    if (result.isError) {
+      return { ok: false, error: `knowledge-retrieval ${spec.nodeId} grep failed: ${result.error?.message ?? 'tool error'}` }
+    }
+    for (const match of result.value?.matches ?? []) {
+      const content = String(match.line ?? '').slice(0, 2000)
+      const lower = content.toLowerCase()
+      let hits = 0
+      for (const term of terms) if (lower.includes(term.toLowerCase())) hits += 1
+      matches.push({
+        content,
+        score: terms.length > 0 ? hits / terms.length : 0,
+        dataset: dataset.id,
+        path: String(match.path ?? ''),
+        lineNumber: Number(match.lineNumber ?? 0),
+      })
+    }
+  }
+  const threshold = Number(spec.scoreThreshold ?? 0)
+  const topK = Math.max(1, Math.min(50, Number(spec.topK ?? 4) || 4))
+  const seen = new Set()
+  const records = matches
+    .filter((item) => item.score >= threshold)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path) || a.lineNumber - b.lineNumber)
+    .filter((item) => {
+      const key = `${item.path}:${item.lineNumber}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(0, topK)
+    .map((item) => ({
+      content: item.content,
+      score: Math.round(item.score * 10_000) / 10_000,
+      title: basename(item.path),
+      metadata: { path: item.path, line: item.lineNumber, dataset: item.dataset },
+    }))
+  return {
+    ok: true,
+    outputs: { result: records, records, query, datasets: datasets.map((item) => item.id) },
+    meta: { engine: 'grep+lexical', datasetRoot: root, terms, candidates: matches.length },
+  }
+}
+
+/** A JS code node's `main({...})` trampoline, executed by `node -e` in the sandbox. */
+function jsProgram(code) {
+  return `
+const __payload = JSON.parse(require('node:fs').readFileSync(0, 'utf8'))
+;(async () => {
+  let __result = { ok: false }
+  try {
+    ${code}
+    if (typeof main !== 'function') throw new TypeError('code node does not define main(...)')
+    const __outputs = await main(__payload.inputs || {})
+    if (__outputs !== undefined && __outputs !== null && (typeof __outputs !== 'object' || Array.isArray(__outputs))) {
+      throw new TypeError('main() must return an object, got ' + (Array.isArray(__outputs) ? 'array' : typeof __outputs))
+    }
+    __result = { ok: true, outputs: __outputs === undefined || __outputs === null ? {} : __outputs }
+  } catch (__e) {
+    __result = { ok: false, error: (__e && __e.name ? __e.name + ': ' : '') + String((__e && __e.message) || __e), traceback: String((__e && __e.stack) || '').slice(-4000) }
+  }
+  process.stdout.write(JSON.stringify(__result))
+})()
+`
+}
+
+/** First JSON object in a model reply (plain, fenced, or surrounded by prose). */
+function extractJsonObject(text) {
+  const raw = String(text ?? '').trim()
+  if (raw.length === 0) return undefined
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim()
+  const candidates = [cleaned]
+  const start = cleaned.indexOf('{')
+  const end = cleaned.lastIndexOf('}')
+  if (start >= 0 && end > start) candidates.push(cleaned.slice(start, end + 1))
+  for (const candidate of candidates) {
+    try {
+      const value = JSON.parse(candidate)
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) return value
+    } catch {
+      // try the next candidate
+    }
+  }
+  return undefined
+}
+
+/** Coerce one extracted value to its declared Dify parameter type. */
+function coerceParameter(type, value) {
+  const declared = String(type ?? 'string').toLowerCase()
+  if (declared.startsWith('array')) {
+    const inner = declared.slice('array'.length).replace(/^\[|\]$/g, '')
+    const list = Array.isArray(value)
+      ? value
+      : typeof value === 'string'
+        ? value.split(/[,，;；\n]/).map((item) => item.trim()).filter(Boolean)
+        : value === undefined || value === null
+          ? []
+          : [value]
+    return list
+      .map((item) => {
+        if (inner === 'number') return asNumber(item)
+        if (inner === 'boolean') return typeof item === 'boolean' ? item : String(item).toLowerCase() === 'true'
+        if (inner === 'object') return item !== null && typeof item === 'object' ? item : { value: item }
+        return stringify(item)
+      })
+      .filter((item) => item !== undefined && item !== '')
+  }
+  if (value === undefined || value === null) {
+    if (declared === 'number') return null
+    if (declared === 'boolean') return false
+    if (declared === 'object') return null
+    return ''
+  }
+  if (declared === 'number') return asNumber(value) ?? null
+  if (declared === 'boolean') return typeof value === 'boolean' ? value : String(value).toLowerCase() === 'true'
+  if (declared === 'object') return typeof value === 'object' ? value : { value }
+  return stringify(value)
+}
+
+/**
+ * Dify `agent` node, executed as ONE model turn.
+ *
+ * The node's strategy and tool policy are parsed and reported, but this runtime
+ * deliberately does not run an autonomous tool loop: a tool loop is a
+ * model-chosen control flow, and this runtime keeps orchestration
+ * deterministic. The instruction/query are still real model input, so the
+ * node's wiring (dataflow in, text out) is exercised end to end.
+ */
+async function executeAgent(ctx, spec, request, env) {
+  const route = resolveRoute(ctx, spec, env)
+  const instruction = String(spec.instruction ?? '').trim()
+  const query = String(spec.query ?? '').trim()
+  const schemaKeys = [
+    ...(Array.isArray(spec.declaredOutputs) ? spec.declaredOutputs : []),
+  ].filter(Boolean)
+  let prompt = query.length > 0 ? query : instruction
+  if (instruction.length > 0 && query.length > 0) prompt = `${instruction}\n\n${query}`
+  if (schemaKeys.length > 0) {
+    prompt += `\n\nReturn only a JSON object with these keys: ${schemaKeys.join(', ')}.`
+  }
+  if (prompt.length === 0) return { ok: false, error: `agent node ${spec.nodeId} has neither an instruction nor a query` }
+  const system = instruction.length > 0 && query.length > 0 ? instruction : undefined
+  const call = await streamLlm(ctx, request, route, {
+    messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+    ...(system !== undefined ? { system } : {}),
+    temperature: typeof spec.temperature === 'number' ? spec.temperature : 0.3,
+    maxTokens: typeof spec.maxTokens === 'number' ? spec.maxTokens : undefined,
+  })
+  if (!call.ok) return { ok: false, error: `agent node ${spec.nodeId} ${call.error}` }
+  const outputs = { text: call.text, output: call.text, reasoning_content: call.reasoning, files: [], json: null }
+  const json = extractJsonObject(call.text)
+  if (json !== undefined) {
+    outputs.json = json
+    for (const key of schemaKeys) if (json[key] !== undefined) outputs[key] = json[key]
+  }
+  return {
+    ok: true,
+    outputs,
+    meta: {
+      provider: route.provider,
+      model: route.model,
+      requested: spec.provider && spec.model ? `${spec.provider}/${spec.model}` : '',
+      routeSource: route.source,
+      strategy: spec.strategy ?? '',
+      mode: 'single-turn',
+      toolsRequested: Array.isArray(spec.tools) ? spec.tools : [],
+      toolsExecuted: [],
+      note: 'tool policy parsed; no autonomous tool loop in this runtime',
+      ...(schemaKeys.length > 0 ? { declaredOutputs: schemaKeys } : {}),
+    },
+  }
+}
+
+/**
+ * Dify `parameter-extractor` node: one structured model turn, then THIS code
+ * parses/coerces the declared parameters. The model never decides what the
+ * downstream graph reads; the declared parameter list does.
+ */
+async function executeParameterExtractor(ctx, spec, request, env) {
+  const route = resolveRoute(ctx, spec, env)
+  const parameters = (Array.isArray(spec.parameters) ? spec.parameters : []).filter((item) => item?.name)
+  if (parameters.length === 0) return { ok: false, error: `parameter-extractor ${spec.nodeId} declares no parameters` }
+  const instruction = String(spec.instruction ?? '').trim() || 'Extract the declared parameters from the input.'
+  const query = stringify(spec.query)
+  const schema = parameters.map((item) => {
+    const options = Array.isArray(item.options) && item.options.length > 0 ? `, one of: ${item.options.join(' | ')}` : ''
+    return `- ${item.name} (${item.type}${item.required ? ', required' : ', optional'}${options}): ${item.description || item.name}`
+  })
+  const prompt = [
+    instruction,
+    '',
+    'Return exactly one JSON object with these keys:',
+    ...schema,
+    '',
+    'Input:',
+    query,
+    '',
+    'Reply with only the JSON object. Use null for a parameter you cannot find.',
+  ].join('\n')
+  const call = await streamLlm(ctx, request, route, {
+    messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+    temperature: typeof spec.temperature === 'number' ? spec.temperature : 0.1,
+    maxTokens: typeof spec.maxTokens === 'number' ? spec.maxTokens : 2048,
+  })
+  if (!call.ok) return { ok: false, error: `parameter-extractor ${spec.nodeId} ${call.error}` }
+  // A reasoning model may put its JSON in the reasoning channel and leave the
+  // final text empty (e.g. max_tokens consumed by thinking); accept either.
+  let json = extractJsonObject(call.text)
+  let parsedFrom = 'text'
+  if (json === undefined && typeof call.reasoning === 'string' && call.reasoning.length > 0) {
+    json = extractJsonObject(call.reasoning)
+    if (json !== undefined) parsedFrom = 'reasoning'
+  }
+  const outputs = {}
+  const missing = []
+  for (const item of parameters) {
+    const raw = json?.[item.name]
+    const coerced = coerceParameter(item.type, raw)
+    outputs[item.name] = coerced
+    const isMissing = raw === undefined || raw === null || raw === '' || (Array.isArray(coerced) && coerced.length === 0)
+    if (isMissing && item.required) missing.push(item.name)
+  }
+  const success = json !== undefined && missing.length === 0
+  outputs.__is_success = success ? 1 : 0
+  outputs.__reason = json === undefined
+    ? 'model reply was not a JSON object'
+    : missing.length > 0
+      ? `missing required parameters: ${missing.join(', ')}`
+      : 'ok'
+  return {
+    ok: true,
+    outputs,
+    meta: {
+      provider: route.provider,
+      model: route.model,
+      routeSource: route.source,
+      reasoningMode: spec.reasoningMode ?? 'prompt',
+      parameters: parameters.map((item) => item.name),
+      missing,
+      finish: call.finish,
+      textChars: call.text.length,
+      reasoningChars: typeof call.reasoning === 'string' ? call.reasoning.length : 0,
+      ...(json !== undefined ? { parsedFrom } : { parsedFrom: 'none' }),
+      raw: json === undefined ? `${call.text}\n${call.reasoning ?? ''}`.trim().slice(0, 800) : undefined,
+    },
+  }
+}
+
+const TEXT_EXTENSIONS = /\.(txt|md|markdown|csv|tsv|json|jsonl|yaml|yml|xml|html?|log|ini|cfg|toml|py|js|mjs|cjs|ts|css|sql)$/i
+
+/** Resolve a document path, refusing anything outside the workspace/document root. */
+function resolveDocumentPath(value, workspaceRoot, env) {
+  const raw = String(value ?? '')
+  if (raw.length === 0) return undefined
+  const resolved = isAbsolute(raw) ? raw : join(workspaceRoot, raw)
+  const roots = [workspaceRoot, env.documentRoot].filter((root) => typeof root === 'string' && root.length > 0)
+  if (!roots.some((root) => resolved === root || resolved.startsWith(`${root}/`))) return undefined
+  return resolved
+}
+
+/**
+ * Dify `document-extractor`, minimal and honest: text-like local files under
+ * the workspace (or a configured document root) and text-like remote URLs via
+ * `ctx.web.fetch`. PDFs/office formats are reported per file, never faked.
+ */
+async function executeDocumentExtractor(ctx, spec, request, env) {
+  const files = spec.files
+  const list = Array.isArray(files) ? files : files === undefined || files === null ? [] : [files]
+  const workspaceRoot = spec.workspaceRoot ?? request.parent?.session?.header?.cwd ?? process.cwd()
+  const web = typeof ctx.get === 'function' ? ctx.get('web') : undefined
+  const extracted = []
+  for (const item of list) {
+    const name = stringify(item?.name ?? item?.filename ?? item?.url ?? item)
+    try {
+      if (typeof item === 'string' || typeof item === 'number') {
+        const path = resolveDocumentPath(item, workspaceRoot, env)
+        if (path === undefined) {
+          extracted.push({ name, text: '', error: `path is outside the workspace: ${stringify(item)}` })
+          continue
+        }
+        if (!existsSync(path)) {
+          extracted.push({ name, text: '', error: `file not found: ${path}` })
+          continue
+        }
+        if (!TEXT_EXTENSIONS.test(path)) {
+          extracted.push({ name, text: '', error: `unsupported document type (text-like files only): ${path}` })
+          continue
+        }
+        const content = readFileSync(path, 'utf8')
+        extracted.push({ name, text: content.length > 2_000_000 ? content.slice(0, 2_000_000) : content })
+        continue
+      }
+      if (item?.text !== undefined || item?.content !== undefined) {
+        extracted.push({ name, text: stringify(item.text ?? item.content) })
+        continue
+      }
+      const remote = item?.url ?? item?.remote_url
+      if (typeof remote === 'string' && /^https?:/i.test(remote)) {
+        if (web === undefined || typeof web.fetch !== 'function') {
+          extracted.push({ name, text: '', error: 'ctx.web is unavailable; cannot fetch a remote document' })
+          continue
+        }
+        const response = await web.fetch({ url: remote }, request.signal)
+        const text = stringify(response.body?.content ?? '')
+        extracted.push({ name, text, meta: { statusCode: response.statusCode } })
+        continue
+      }
+      const value = item?.file_path ?? item?.path ?? item?.local_path
+      if (value !== undefined) {
+        const path = resolveDocumentPath(value, workspaceRoot, env)
+        if (path === undefined || !existsSync(path)) {
+          extracted.push({ name, text: '', error: `file not found under the workspace: ${stringify(value)}` })
+          continue
+        }
+        if (!TEXT_EXTENSIONS.test(path)) {
+          extracted.push({ name, text: '', error: `unsupported document type (text-like files only): ${path}` })
+          continue
+        }
+        extracted.push({ name, text: readFileSync(path, 'utf8').slice(0, 2_000_000) })
+        continue
+      }
+      extracted.push({ name, text: '', error: 'unrecognized file descriptor' })
+    } catch (error) {
+      extracted.push({ name, text: '', error: `${error?.name ?? 'Error'}: ${error?.message ?? String(error)}` })
+    }
+  }
+  const text = extracted.map((item) => item.text).filter((item) => item.length > 0).join('\n')
+  const failures = extracted.filter((item) => item.error !== undefined)
+  return {
+    ok: true,
+    outputs: { text, files: extracted, count: extracted.length },
+    meta: { extracted: extracted.length - failures.length, failed: failures.length, ...(failures.length > 0 ? { errors: failures.map((item) => item.error) } : {}) },
+  }
+}
+
+/**
+ * Dify `datasource` (plugin-backed in Dify). Minimal local implementation:
+ * read `parameters.path` as JSON/JSONL/text under the workspace; expose the
+ * records plus each field of the first record for downstream selectors.
+ */
+async function executeDatasource(ctx, spec, request, env) {
+  const workspaceRoot = spec.workspaceRoot ?? request.parent?.session?.header?.cwd ?? process.cwd()
+  const parameters = spec.parameters ?? {}
+  const configured = parameters.path ?? parameters.file ?? parameters.url ?? spec.datasourceName
+  if (configured === undefined || configured === null || stringify(configured).length === 0) {
+    return { ok: false, error: `datasource ${spec.nodeId} has no local path configured (parameters.path)` }
+  }
+  const path = resolveDocumentPath(configured, workspaceRoot, env)
+  if (path === undefined) return { ok: false, error: `datasource ${spec.nodeId} path is outside the workspace: ${stringify(configured)}` }
+  if (!existsSync(path)) return { ok: false, error: `datasource ${spec.nodeId} file not found: ${path}` }
+  let records = []
+  try {
+    const content = readFileSync(path, 'utf8').slice(0, 4_000_000)
+    if (/\.jsonl?$/i.test(path) || /^\s*[[{]/.test(content)) {
+      try {
+        const parsed = JSON.parse(content)
+        records = Array.isArray(parsed) ? parsed : [parsed]
+      } catch {
+        records = content.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+          try {
+            return JSON.parse(line)
+          } catch {
+            return { line }
+          }
+        })
+      }
+    } else {
+      records = content.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => ({ line }))
+    }
+  } catch (error) {
+    return { ok: false, error: `datasource ${spec.nodeId} cannot read ${path}: ${error?.message ?? String(error)}` }
+  }
+  const first = records[0]
+  const outputs = { output: records, records, result: records, count: records.length, datasource: spec.datasourceName ?? '', record: first ?? null }
+  if (first !== null && typeof first === 'object' && !Array.isArray(first)) {
+    for (const [key, value] of Object.entries(first)) if (outputs[key] === undefined) outputs[key] = value
+  }
+  return {
+    ok: true,
+    outputs,
+    meta: { provider: spec.provider ?? '', datasource: spec.datasourceName ?? '', path, count: records.length, engine: 'local-file' },
+  }
+}
+
+/**
+ * Dify `knowledge-index`: parsed and scheduled, but this runtime has no vector
+ * store to write to. It reports what it *would* index instead of pretending a
+ * write happened.
+ */
+async function executeKnowledgeIndex(ctx, spec, request, env) {
+  const chunk = spec.chunk
+  const chunks = Array.isArray(chunk) ? chunk : chunk === undefined || chunk === null ? [] : [chunk]
+  return {
+    ok: true,
+    outputs: {
+      dataset_id: spec.datasetId ?? '',
+      indexed: 0,
+      chunks: chunks.length,
+      status: 'not_written',
+    },
+    meta: {
+      engine: 'placeholder',
+      note: 'knowledge-index parsed and scheduled; no vector store is mounted in this runtime',
+      keywordNumber: spec.keywordNumber ?? 10,
+    },
+  }
+}
+
+/**
+ * Dify `human-input`, resolved deterministically for a non-interactive run: the
+ * run args (`human.<nodeId>.action`, then `action`) pick a declared action,
+ * otherwise the first declared action is used. Form inputs come from their
+ * declared constants; the resolved action names the outgoing edge.
+ */
+function executeHumanInput(spec) {
+  const actions = (Array.isArray(spec.actions) ? spec.actions : []).filter((action) => stringify(action?.id).length > 0)
+  const ids = actions.map((action) => stringify(action.id))
+  let chosen = spec.autoAction === undefined || spec.autoAction === null || spec.autoAction === '' ? '' : stringify(spec.autoAction)
+  if (chosen.length === 0) chosen = ids[0] ?? '__timeout'
+  if (chosen !== '__timeout' && !ids.includes(chosen)) {
+    return { ok: false, error: `human-input ${spec.nodeId} action "${chosen}" is not declared (declared: ${ids.join(', ') || '(none)'})` }
+  }
+  const outputs = { __action_id: chosen, __action_value: chosen, __rendered_content: spec.formContent ?? '' }
+  for (const input of spec.formInputs ?? []) {
+    const name = stringify(input?.name)
+    if (name.length === 0) continue
+    const fallback = input?.default
+    outputs[name] = fallback !== null && typeof fallback === 'object' && 'value' in fallback ? fallback.value : fallback ?? ''
+  }
+  return {
+    ok: true,
+    branch: chosen,
+    outputs,
+    meta: { autoResolved: true, actions: ids, note: 'human step resolved from run args / first declared action' },
   }
 }
 

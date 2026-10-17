@@ -12,6 +12,11 @@ __pycache__/
 .venv/
 venv/
 
+# ---- 插件运行时临时目录 ----
+# 测试/运行会在插件目录里生成随机后缀的临时工作区，含 records.jsonl 等一次性产物。
+dsh-dify-native/.tmp-*/
+dsh-dify-native/tests/.tmp/
+
 # ---- 运行临时目录 ----
 # runs/ 下的 *.json / *.jsonl / *.md 是验证证据，保留入库；
 # 下列沙箱/探针临时目录是一次性产物，不入库。

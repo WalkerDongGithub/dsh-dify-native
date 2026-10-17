@@ -1,0 +1,42 @@
+app:
+  name: nodes-list-operator
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: s
+        type: custom
+        data:
+          type: start
+          title: 开始
+          variables:
+            - { variable: rows, label: 记录, type: "array[object]", required: true }
+      - id: op
+        type: custom
+        data:
+          type: list-operator
+          title: 列表操作
+          var_type: "array[object]"
+          variable: [s, rows]
+          filter_by:
+            enabled: true
+            filters:
+              - { key: status, comparison_operator: "=", value: ok, varType: string }
+          order_by:
+            enabled: true
+            key: score
+            value: desc
+          limit:
+            enabled: true
+            size: 2
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: result, value_selector: [op, result] }
+            - { variable: count, value_selector: [op, count] }
+    edges:
+      - { source: s, target: op, sourceHandle: source }
+      - { source: op, target: e, sourceHandle: source }

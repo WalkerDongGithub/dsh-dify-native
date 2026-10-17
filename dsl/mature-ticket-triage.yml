@@ -1,0 +1,151 @@
+app:
+  name: mature-ticket-triage
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: s
+        type: custom
+        data:
+          type: start
+          title: 开始
+          variables:
+            - { variable: ticket, label: 客服工单, type: paragraph, required: true }
+      - id: pe
+        type: custom
+        data:
+          type: parameter-extractor
+          title: 提取工单参数
+          query: [s, ticket]
+          reasoning_mode: prompt
+          instruction: |-
+            你是客服工单解析器。从工单中提取两项：
+            priority：只能是 high 或 normal；
+            keywords：需要跟进的关键词数组（1-5 个）。
+            只输出 JSON 对象，键为 priority 和 keywords。
+          model:
+            provider: zai
+            name: glm-4.5-air
+            mode: chat
+            completion_params: { temperature: 0.1 }
+          parameters:
+            - { name: priority, type: string, description: "high 或 normal", required: true }
+            - { name: keywords, type: "array[string]", description: 关键词数组, required: false }
+      - id: br
+        type: custom
+        data:
+          type: if-else
+          title: 是否高优先级
+          cases:
+            - case_id: "true"
+              logical_operator: and
+              conditions:
+                - { variable_selector: [pe, priority], comparison_operator: "=", value: high, varType: string }
+      - id: high
+        type: custom
+        data:
+          type: llm
+          title: 高优先级建议
+          model:
+            provider: zai
+            name: glm-4.5-air
+            mode: chat
+            completion_params: { temperature: 0.3, max_tokens: 120 }
+          prompt_template:
+            - { role: system, text: "你是客服主管，用一句中文给出可执行的处理建议，不超过40字。" }
+            - { role: user, text: "工单：{{#s.ticket#}}" }
+          context: { enabled: false, variable_selector: [] }
+      - id: normal
+        type: custom
+        data:
+          type: template-transform
+          title: 常规队列
+          template: "常规工单，按队列处理。"
+          variables: []
+      - id: agg
+        type: custom
+        data:
+          type: variable-aggregator
+          title: 合并建议
+          output_type: string
+          variables:
+            - [high, text]
+            - [normal, output]
+      - id: split
+        type: custom
+        data:
+          type: code
+          title: 关键词拆解
+          code_language: python3
+          code: |-
+            def main(keywords):
+                if isinstance(keywords, str):
+                    items = [k.strip() for k in keywords.replace("，", ",").split(",") if k.strip()]
+                elif isinstance(keywords, list):
+                    items = [str(k).strip() for k in keywords if str(k).strip()]
+                else:
+                    items = []
+                if not items:
+                    items = ["general"]
+                return {"items": items[:5]}
+          variables:
+            - { variable: keywords, value_selector: [pe, keywords] }
+          outputs:
+            items: { type: "array[string]" }
+      - id: iter
+        type: custom
+        data:
+          type: iteration
+          title: 逐关键词跟进
+          iterator_selector: [split, items]
+          output_selector: [inner, output]
+          output_type: "array[string]"
+          is_parallel: false
+          error_handle_mode: continue-on-error
+          start_node_id: iter-start
+      - id: iter-start
+        type: custom
+        parentId: iter
+        data:
+          type: iteration-start
+          title: 迭代开始
+          isInIteration: true
+          iteration_id: iter
+      - id: inner
+        type: custom
+        parentId: iter
+        data:
+          type: template-transform
+          title: 关键词项
+          isInIteration: true
+          iteration_id: iter
+          template: "· {{#iter-start.item#}}"
+          variables: []
+      - id: final
+        type: custom
+        data:
+          type: template-transform
+          title: 汇总回复
+          template: "建议：{{#agg.output#}}\n关键词：\n{{#iter.output#}}"
+          variables: []
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: reply, value_selector: [final, output] }
+            - { variable: advice, value_selector: [agg, output] }
+            - { variable: keywords, value_selector: [split, items] }
+    edges:
+      - { source: s, target: pe, sourceHandle: source }
+      - { source: pe, target: br, sourceHandle: source }
+      - { source: br, target: high, sourceHandle: "true" }
+      - { source: br, target: normal, sourceHandle: "false" }
+      - { source: high, target: agg, sourceHandle: source }
+      - { source: normal, target: agg, sourceHandle: source }
+      - { source: agg, target: split, sourceHandle: source }
+      - { source: split, target: iter, sourceHandle: source }
+      - { source: iter, target: final, sourceHandle: source }
+      - { source: final, target: e, sourceHandle: source }
+      - { source: iter-start, target: inner, sourceHandle: source }

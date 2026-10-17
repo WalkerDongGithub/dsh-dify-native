@@ -1,0 +1,66 @@
+app:
+  name: nodes-loop
+  mode: workflow
+workflow:
+  graph:
+    nodes:
+      - id: s
+        type: custom
+        data:
+          type: start
+          title: 开始
+          variables:
+            - { variable: rounds, label: 轮数, type: number, required: true }
+      - id: loop
+        type: custom
+        data:
+          type: loop
+          title: 循环
+          loop_count_selector: [s, rounds]
+          logical_operator: and
+          break_conditions:
+            - variable_selector: [tpl, output]
+              comparison_operator: contains
+              value: "STOP"
+              varType: string
+          start_node_id: loop-start
+      - id: loop-start
+        type: custom
+        parentId: loop
+        data:
+          type: loop-start
+          title: 循环开始
+          isInLoop: true
+          loop_id: loop
+      - id: tpl
+        type: custom
+        parentId: loop
+        data:
+          type: template-transform
+          title: 单轮
+          isInLoop: true
+          loop_id: loop
+          template: "round-{{#loop-start.index#}}"
+          variables: []
+      - id: loop-end
+        type: custom
+        parentId: loop
+        data:
+          type: loop-end
+          title: 循环结束
+          isInLoop: true
+          loop_id: loop
+          outputs:
+            - { variable: round, value_selector: [tpl, output] }
+      - id: e
+        type: custom
+        data:
+          type: end
+          title: 结束
+          outputs:
+            - { variable: result, value_selector: [loop, output] }
+    edges:
+      - { source: s, target: loop, sourceHandle: source }
+      - { source: loop, target: e, sourceHandle: source }
+      - { source: loop-start, target: tpl, sourceHandle: source }
+      - { source: tpl, target: loop-end, sourceHandle: source }

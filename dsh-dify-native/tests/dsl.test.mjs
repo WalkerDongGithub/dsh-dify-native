@@ -97,16 +97,66 @@ workflow:
   console.log('ok 4 — synthetic two-code chain compiles with cross-node dataflow')
 }
 
-// 5. an unsupported node type still fails closed.
+// 5. every Dify node type is parsed: a container compiles, and an unknown
+//    future type is a visible generic passthrough (never "unsupported").
 {
-  const parsed = parseDifyDsl(read('form-demo.yml'))
+  const yml = `
+app: { name: containers, mode: workflow }
+workflow:
+  graph:
+    nodes:
+      - { id: s, type: custom, data: { type: start, variables: [] } }
+      - id: i
+        type: custom
+        data:
+          type: iteration
+          title: loop
+          iterator_selector: [s, items]
+          output_selector: [tpl, output]
+          start_node_id: i-start
+      - { id: i-start, type: custom, parentId: i, data: { type: iteration-start, title: start, isInIteration: true, iteration_id: i } }
+      - { id: tpl, type: custom, parentId: i, data: { type: template-transform, title: body, isInIteration: true, iteration_id: i, template: "{{#i-start.item#}}", variables: [] } }
+      - { id: e, type: custom, data: { type: end, outputs: [{ variable: out, value_selector: [i, output] }] } }
+    edges:
+      - { source: s, target: i, sourceHandle: source }
+      - { source: i, target: e, sourceHandle: source }
+      - { source: i-start, target: tpl, sourceHandle: source }
+`
+  const parsed = parseDifyDsl(yml)
   const inspection = inspectGraph(parsed)
-  assert.ok(inspection.unsupported.some((n) => n.type === 'answer'))
-  assert.throws(() => compileGraph(parsed), /unsupported node types/)
-  console.log('ok 5 — form-demo rejected (answer/assigner unsupported, fail closed)')
+  assert.deepEqual(inspection.unsupported, [])
+  assert.equal(inspection.nodeTypes.iteration, 1)
+  assert.equal(inspection.nodeTypes['iteration-start'], 1)
+  assert.equal(inspection.containers.length, 1)
+  assert.deepEqual(inspection.containers[0].children, ['i-start', 'tpl'])
+  const compiled = compileGraph(parsed)
+  assert.match(compiled.script, /__out0/)
+  assert.match(compiled.script, /__itemIt0/)
+
+  const future = `
+app: { name: future, mode: workflow }
+workflow:
+  graph:
+    nodes:
+      - { id: s, type: custom, data: { type: start, variables: [] } }
+      - { id: x, type: custom, data: { type: brand-new-node, title: future } }
+      - { id: e, type: custom, data: { type: end, outputs: [] } }
+    edges:
+      - { source: s, target: x, sourceHandle: source }
+      - { source: x, target: e, sourceHandle: source }
+`
+  const futureParsed = parseDifyDsl(future)
+  const futureInspection = inspectGraph(futureParsed)
+  assert.deepEqual(futureInspection.unsupported, [])
+  assert.deepEqual(futureInspection.unknownKinds, ['brand-new-node'])
+  assert.ok(futureInspection.warnings.some((warning) => /generic passthrough/.test(warning)))
+  const futureCompiled = compileGraph(futureParsed)
+  assert.match(futureCompiled.script, /kind: 'generic'/)
+  console.log('ok 5 — iteration compiles as a container; unknown types are visible generic passthroughs')
 }
 
-// 6. a node with two outgoing edges that is not if-else is rejected.
+// 6. non-branch fan-out (two arms off one node) is a legal Dify shape: both
+//    arms are compiled behind their own dataflow guards, no edge is guessed.
 {
   const yml = `
 app: { name: split, mode: workflow }
@@ -116,7 +166,7 @@ workflow:
       - { id: s, type: custom, data: { type: start, variables: [] } }
       - { id: c1, type: custom, data: { type: code, code: "def main(): return {}", variables: [] } }
       - { id: c2, type: custom, data: { type: code, code: "def main(): return {}", variables: [] } }
-      - { id: e, type: custom, data: { type: end, outputs: [] } }
+      - { id: e, type: custom, data: { type: end, outputs: [{ variable: one, value_selector: [c1, result] }, { variable: two, value_selector: [c2, result] }] } }
     edges:
       - { source: s, target: c1, sourceHandle: source }
       - { source: s, target: c2, sourceHandle: source }
@@ -124,8 +174,41 @@ workflow:
       - { source: c2, target: e, sourceHandle: source }
 `
   const parsed = parseDifyDsl(yml)
-  assert.throws(() => compileGraph(parsed), /outgoing edges/)
-  console.log('ok 6 — non-if-else split rejected (no guessed scheduling)')
+  assert.deepEqual(inspectGraph(parsed).issues, [])
+  const compiled = compileGraph(parsed)
+  assert.equal(compiled.order.length, 4)
+  assert.match(compiled.script, /__ran\["s"\] === true/)
+  console.log('ok 6 — non-branch fan-out compiles as guarded parallel arms')
+}
+
+// 7. real form-demo (advanced-chat: answer / assigner / template) compiles.
+{
+  const parsed = parseDifyDsl(read('form-demo.yml'))
+  const inspection = inspectGraph(parsed)
+  assert.deepEqual(inspection.unsupported, [])
+  assert.equal(inspection.answerCount, 3)
+  const compiled = compileGraph(parsed)
+  assert.equal(compiled.order.length, 10)
+  assert.match(compiled.script, /__answers\.push/)
+  assert.match(compiled.script, /__vars\["conversation"\]\["user_token"\]/)
+  assert.match(compiled.script, /kind: 'assigner'/)
+  console.log('ok 7 — form-demo compiles (answers + assigner + advanced-chat, no end)')
+}
+
+// 8. real intent-reply (question-classifier / knowledge-retrieval / context)
+//    compiles, with class ids used as edge handles.
+{
+  const parsed = parseDifyDsl(read('intent-reply.yml'))
+  const inspection = inspectGraph(parsed)
+  assert.deepEqual(inspection.unsupported, [])
+  const compiled = compileGraph(parsed)
+  assert.match(compiled.script, /"kind":"question-classifier"/)
+  assert.match(compiled.script, /__branch\["1718246909580"\] = String\(__r1\.outputs\.class_id\)/)
+  assert.match(compiled.script, /__branch\["1718246909580"\] === "1715846546749"/)
+  assert.match(compiled.script, /"kind":"knowledge-retrieval"/)
+  assert.match(compiled.script, /__text\(__r0\?\.outputs\["text"\]\)/)
+  assert.match(compiled.script, /__text\(__r3\?\.outputs\["result"\]\)/)
+  console.log('ok 8 — intent-reply compiles (classifier edges + knowledge + {{#context#}})')
 }
 
 console.log('DSL TESTS OK')
