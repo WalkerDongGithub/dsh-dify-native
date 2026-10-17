@@ -13,6 +13,7 @@ for test in \
   tests/template-jinja.test.mjs \
   tests/session-memory.test.mjs \
   tests/sys-vars.test.mjs \
+  tests/code-file-input.test.mjs \
   tests/provider.test.mjs \
   tests/tool-contracts.test.mjs \
   tests/tool-node.test.mjs \
