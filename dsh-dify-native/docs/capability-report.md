@@ -114,6 +114,6 @@ conversation 回归先真实失败（第二次仍为1），修复后 engine-conv
 
 #6（trigger/trigger-webhook）与 #9（trigger-plugin）基础桥已修，真实 engine-events.test.mjs 通过；源码固定新版 5dff246，完整部署/诊断边界见 [event-deployment.md](event-deployment.md)。原生插件订阅、公网、multipart/文件生命周期仍 S 子项，未宣称7组全兼容。
 
-#7 trigger-schedule 基础调度已修：croniter 五字段 cron/IANA 时区、真实槽时间、持久位置、去重/重启补偿；engine-schedule.test.mjs 真实引擎通过。visual_config 原生转换及分布式调度仍 S 子项。
+#7 trigger-schedule 基础调度已修：croniter 五字段 cron/IANA 时区、真实槽时间、持久位置、去重/重启补偿；engine-schedule.test.mjs 真实引擎通过。visual_config 四种频率及 last 已追加真实引擎验证；未证明的 Dify 原生调度服务生命周期保持 S 子项，不把分布式 exactly-once 虚构成官方要求。
 
 #8 human 基础等待已修，见 [human-wait.md](human-wait.md)。新增真实回归还发现普通 HTTP 成功后下游被错误分支 guard 跳过，先复现 outputs=null，再修到真实响应进入下游（engine-http-follow.test.mjs）。只有 fail-branch 配置才按 HTTP handle 选边；旧断言未变。

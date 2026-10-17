@@ -465,6 +465,6 @@ TLS 4651731 已复核；start.config 在固定版本不存在，不凭空实现�
 
 #6 两节点与 #9 一节点：HTTP listener、鉴权/载荷映射、持久去重及显式签名插件桥已修；真实引擎测试 engine-events.test.mjs。新增节点参考另固定 5dff246，路径/函数与 S 边界见 event-deployment.md，未改写历史 Q1。原生订阅/文件/公网未验仍 S。
 
-#7 基础项已修：cron/时区/真实槽时间/持久补偿去重；engine-schedule.test.mjs 先失败缺调度入口，修后真实引擎通过。visual_config 原生转换仍 S 子项；没有以 timer 探针声称 cron 全兼容。
+#7 基础项已修：cron/时区/真实槽时间/持久补偿去重；engine-schedule.test.mjs 先失败缺调度入口，修后真实引擎通过。visual_config 四种频率及 last 已补，固定新版纯函数复用且真实引擎通过；原生服务生命周期未验证仍 S。
 
 #8 顶层真实等待/持久 checkpoint/提交/超时恢复已修；取消默认首选动作，保留显式注入。engine-human-wait.test.mjs 验证重开后恢复且上游 HTTP 不重放，等待时误新 run 明确拒绝；engine-human-form.test.mjs 验证动态内容/默认变量。容器内暂停、高级表单、自动过期通知及原生生命周期仍 S 子项。另修普通 HTTP 错误 guard 跳过下游：真实失败回归 engine-http-follow.test.mjs 已通过。

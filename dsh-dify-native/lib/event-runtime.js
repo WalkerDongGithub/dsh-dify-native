@@ -16,7 +16,7 @@ export async function startEventRuntime(ctx, config, parent) {
   const schedules = []
   const cronSlots = async (route, after, until) => {
     const vendor = process.env.DIFY_EVENTS_VENDOR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '.vendor-events')
-    const { stdout } = await promisify(execFile)(process.env.DIFY_RUNTIME_PYTHON ?? 'python3', [join(dirname(fileURLToPath(import.meta.url)), 'cron-slots.py'), JSON.stringify({ cron: route.cron, timezone: route.timezone ?? 'UTC', after, until })], { env: { ...process.env, PYTHONPATH: [vendor, process.env.DIFY_PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(':') }, timeout: 10_000, maxBuffer: 1_048_576 })
+    const { stdout } = await promisify(execFile)(process.env.DIFY_RUNTIME_PYTHON ?? 'python3', [join(dirname(fileURLToPath(import.meta.url)), 'cron-slots.py'), JSON.stringify({ cron: route.cron, node: route.entry.data, timezone: route.timezone ?? 'UTC', after, until })], { env: { ...process.env, PYTHONPATH: [vendor, process.env.DIFY_PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(':') }, timeout: 10_000, maxBuffer: 1_048_576 })
     return JSON.parse(stdout)
   }
   for (const declaration of config.schedules ?? []) {

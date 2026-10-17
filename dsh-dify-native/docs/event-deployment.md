@@ -29,6 +29,8 @@ plugin bridge 必须 `bridge:true`，签名 `X-Event-Signature` 为 hex HMAC-SHA
 {"schedules":[{"id":"daily","workflow":"/abs/schedule.yml","cron":"0 9 * * *","timezone":"Asia/Shanghai","start_at":"2026-10-18T00:59:00.000Z"}]}
 ```
 
-声明式 cron 或节点 cron_expression 必须为5字段；使用 IANA 时区，默认 UTC。启动后每30秒检查（poll_ms 可配，最低100ms）；输出 triggered_at 为实际调度槽 UTC 时间，替代旧 epoch。start_at 缺省从启动时起算；重启读取已持久化位置并补偿，单次超过1000槽明确失败，不能静默截断。每槽同样先 claimed，再调用真实 runner；已失败工作流不自动重试副作用。可用 runtime.tick(Date) 做受控时钟验证，实际交付仍走 workflowEngine.start。时钟倒退不回放。当前未实现 visual_config 自动转 cron，须显式声明 cron；这一原生模式仍为 S 子项。croniter 缺失明确给安装命令；定时错误写 stderr，保留持久 claimed，不静默成功。
+声明式 cron 或节点 cron_expression 支持5字段或 croniter @daily 等别名；使用 IANA 时区，默认 UTC。启动后每30秒检查（poll_ms 可配，最低100ms）；输出 triggered_at 为实际调度槽 UTC 时间，替代旧 epoch。start_at 缺省从启动时起算；重启读取已持久化位置并补偿，单次超过1000槽明确失败，不能静默截断。每槽同样先 claimed，再调用真实 runner；已失败工作流不自动重试副作用。可用 runtime.tick(Date) 做受控时钟验证，实际交付仍走 workflowEngine.start。时钟倒退不回放。visual 模式复用固定新版 `api/services/trigger/schedule_service.py:ScheduleService.visual_to_cron` 与 `api/libs/schedule_utils.py:convert_12h_to_24h`，实现 hourly/daily/weekly/monthly（含 last），无需手工改写 cron。croniter 缺失明确给安装命令；定时错误写 stderr，保留持久 claimed，不静默成功。
 
 `tests/engine-schedule.test.mjs` 真实验证 Asia/Shanghai 09:00 → UTC01:00、同槽去重、关闭重开后的补偿，不以 mock 引擎替代交付。计时器生命周期关闭已验证，公网及分布式调度未验。
+
+新增 `tests/engine-schedule-visual.test.mjs` 先真实失败（缺少 cron 转换），修复后四种 visual 频率均实际启动引擎并断言 UTC 槽时间。转换函数保存在 lib/schedule-parser.py，来源固定 5dff246。

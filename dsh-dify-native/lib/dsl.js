@@ -147,7 +147,7 @@ const CONSUMED_FIELDS = {
   'iteration-end': new Set(['outputs']),
   note: new Set(['text']),
   trigger: new Set(['method', 'content_type', 'variables', 'status_code', 'schedule_type', 'cron', 'mode', 'endpoint']),
-  'trigger-schedule': new Set(['schedule_type', 'cron', 'mode', 'variables', 'cron_expression', 'timezone']),
+  'trigger-schedule': new Set(['schedule_type', 'cron', 'mode', 'variables', 'cron_expression', 'timezone', 'frequency', 'visual_config']),
   'trigger-webhook': new Set(['method', 'content_type', 'variables', 'status_code', 'endpoint', 'headers', 'params', 'body']),
   'trigger-plugin': new Set(['provider_name', 'provider_id', 'event', 'variables']),
   generic: new Set(),

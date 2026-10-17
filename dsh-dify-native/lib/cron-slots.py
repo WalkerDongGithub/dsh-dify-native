@@ -9,7 +9,16 @@ except ImportError:
 p=json.loads(sys.argv[1])
 start=datetime.fromisoformat(p['after'].replace('Z','+00:00')).astimezone(ZoneInfo(p['timezone']))
 end=datetime.fromisoformat(p['until'].replace('Z','+00:00'))
-if len(p['cron'].split()) != 5: sys.exit('Only five-field cron is supported; declare an explicit minute-based schedule')
+if not p.get('cron'):
+    import importlib.util
+    from pathlib import Path
+    from types import SimpleNamespace
+    spec=importlib.util.spec_from_file_location('schedule_parser',Path(__file__).with_name('schedule-parser.py'));parser=importlib.util.module_from_spec(spec);spec.loader.exec_module(parser)
+    node=p.get('node',{})
+    if node.get('mode','visual')!='visual': sys.exit('cron_expression is required for cron mode')
+    visual={'on_minute':0,'time':'12:00 AM','weekdays':None,'monthly_days':None,**(node.get('visual_config') or {})}
+    p['cron']=parser.visual_to_cron(node.get('frequency'),SimpleNamespace(**visual))
+if len(p['cron'].split()) != 5 and not p['cron'].startswith('@'): sys.exit('Only five-field cron is supported; declare an explicit minute-based schedule')
 it=croniter(p['cron'],start)
 slots=[]
 while True:
