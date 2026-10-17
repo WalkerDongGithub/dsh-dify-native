@@ -159,7 +159,7 @@ Dify **未来版本**新增的节点类型不在里面，会被当作未知类�
 | `knowledge-retrieval` | 在本地数据集目录上做词法 grep（含 CJK bigram） | **不是向量检索**，没有 embedding |
 | `tool` | 三选一：声明式 YAML 契约（一次 HTTP 请求 + 响应映射）/ 显式 opt-in 的宿主工具 passthrough / 拒绝 | **不支持 `.difypkg` 插件**（需要 plugin daemon）；没有名字猜测表；契约格式与限制见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md) |
 | `agent` | 单次模型回合 | **声明的 tools 不执行** |
-| `document-extractor` | 文本类文件 | **无 PDF / Office 解析** |
+| `document-extractor` | 固定官方 PDFium / python-docx / pandas+openpyxl 提取；8 格式逐字差分验证 | 需显式安装轻量依赖；旧 Office/unstructured 链仍有 S 子项，不含 OCR |
 | `datasource` | 本地 JSON / JSONL / 文本文件 | 不是 Dify datasource 插件 |
 | `human-input` | 从运行参数或首个声明动作确定性解析 | **不支持暂停/恢复** |
 
@@ -268,7 +268,7 @@ session log，不引入自己的会话存储。
   越界直接拒绝；同时支持 `ctx.web.fetch` 拉远程 URL 的文本。
 - **knowledge-retrieval**：`dataset_ids` 按 `DIFY_KNOWLEDGE_ROOT` 解析成本地目录，
   找不到就报错并列缺失的 id（不会静默返回空结果）。注意：写成绝对路径的 id 会原样使用。
-- **http-request**：纯 GET 走 `ctx.web.fetch`；其余走沙箱 + `curl`。
+- **http-request**：纯 GET 走 `ctx.web.fetch`；其余及 `ssl_verify=false` 走沙箱 + `curl`。false 仅对单请求关闭验证；null 明确失败。
 
 ### ⚠️ 已知限制：模板里的属性访问可以穿透到 JS 宿主
 
@@ -428,3 +428,8 @@ cd dsh-dify-native
   不会自动获得实现。
 - **`full` 不是"已对 Dify 验证"的同义词**。它是"没有检测到降级原因"的默认级别；
   与真实 dsh 引擎的执行证据以 [`docs/capability-report.md`](docs/capability-report.md) 为准。
+
+提取依赖安装：`./scripts/install-extraction.sh`（Python 由 `DIFY_RUNTIME_PYTHON` 选择）。
+依赖固定在 `requirements-extraction.txt`，默认安装到插件新建 `.vendor-extraction`，已存在则拒绝覆盖。
+也可设置 `DIFY_EXTRACTION_VENDOR` 指向新的安装目录；正常提取自动把该目录及 `DIFY_PYTHONPATH` 加入搜索路径。
+运行时不隐式安装，缺库给出可操作错误。未安装重量级 unstructured，旧格式转换仍列 S。

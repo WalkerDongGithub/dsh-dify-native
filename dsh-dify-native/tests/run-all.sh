@@ -22,7 +22,9 @@ for test in \
   tests/container-scope.test.mjs \
   tests/engine-e2e.test.mjs \
   tests/engine-nested.test.mjs \
-  tests/engine-http-tls.test.mjs
+  tests/engine-http-tls.test.mjs \
+  tests/engine-extraction.test.mjs \
+  tests/engine-extraction-differential.test.mjs
 do
   echo "== $test"
   node "$test"

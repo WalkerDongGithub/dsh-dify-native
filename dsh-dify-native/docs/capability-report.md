@@ -52,7 +52,7 @@ form-demo 的聊天分支使用解析后 DSL 中预置的 conversation 默认值
 | simplified（实例可能显示 full） | trigger、trigger-schedule、trigger-webhook、trigger-plugin | 将 run args 当事件载荷；不创建调度器、webhook listener 或 Dify 插件订阅。inspect 中 trigger-webhook 为 full 只指载荷注入实现 |
 | simplified | knowledge-retrieval | 真实 grep 本地目录 + 词法排序，非 embedding 检索；使用帮助分支实际执行并检查返回记录 |
 | simplified | agent | 单次模型调用，不执行自治工具循环；样本中实际执行并检查 toolsExecuted=[] |
-| simplified | document-extractor | 本地文本类文件 / 支持的远程文本；不证明 PDF、Office 提取 |
+| 固定提取函数（有限格式） | document-extractor | PDFium 4.30.0、python-docx、pandas/openpyxl；8 种格式与官方纯函数逐字差分，数组/远程字节/失败已验；旧格式仍有 S 子项 |
 | simplified | datasource / datasource-empty | 本地 JSON、JSONL、文本读取，不加载 Dify datasource 插件 |
 | simplified | human-input | 从参数选择动作，或选择第一个动作；不暂停等待真人。额外真实引擎用例分别执行 approve / reject 并检查最终值 |
 | placeholder | knowledge-index | 实际被调度，但不写向量库；额外用例断言最终 status=not_written、indexed=0 |
@@ -93,13 +93,15 @@ DIFY_E2E_EVIDENCE=/tmp/dify-e2e-evidence.json node tests/engine-e2e.test.mjs
 ## 尚未完成
 
 - 真实 Dify datasource 插件/其他导出参数形态未覆盖；本次仅证明样本的本地 path 契约。
-- `http-request.ssl_verify`、`start.config` 尚未补齐；当前测试不能证明这些选项生效。
+- `http-request.ssl_verify` 已在 4651731 修复并真实验证；`start.config` 固定官方版本无此字段，不赋予猜测语义。
 - 表单 conversation 变量跨 run 持久化，以及公网 Jina 部署仍需处理。
 - file 输入的“multiple values for keyword argument”未复现；新增测试证明 dict 原样传入，未宣称修复该未复现错误。
 - RAG 扩展按用户要求暂停。尚未合并 main 或推送远端。
 
-## 2026-10-18 收尾批次 1（保留以上历史审计）
+## Extraction 修正与验证（2026-10-18）
 
-#1 document-extractor 基础差距已修：数组保留 `text: string[]`，单文件为 string，任一文件错误使节点失败；删除静默截断；远程用原始 bytes 并检查 HTTP 状态。PDF 使用已装 PyMuPDF，DOCX/XLSX/PPTX 使用 stdlib OOXML 替代提取，标注 `extraction.alternative-engine`、ocr=false；XLSX 公式明确拒绝，旧 DOC/PPT/XLS/MSG/EPUB 完整转换链仍为 S 子项，未伪称全兼容。配置 Python 依赖缺失会给安装及 DIFY_RUNTIME_PYTHON/DIFY_PYTHONPATH 提示。
+02d4101 最初的 stdlib OOXML 方案有实际语义偏差，已撤换。现在复用固定 cd47a47 的 `document_extractor/node.py` 纯提取函数，PDF 使用官方精确版本 pypdfium2==4.30.0，DOCX 使用 python-docx，Excel 使用 pandas/openpyxl，包括公式缓存读取，不自行计算公式。DOCX 表头 `---`、单元格 `<br>`、JSON/YAML/CSV/properties 转换均按官方函数；VTT 使用官方 `_extract_text_from_vtt`（固定版扩展名路由把 .vtt 当纯文本，本地明确选择转换函数）。PDF/合法 DOCX/多 sheet XLSX/CSV/JSON/YAML/VTT/properties 由 AST 加载固定官方源码计算预期值，真实 workflowEngine.start 输出逐字相等。原数组、长文本、远程 PDF、404/文件/二进制失败断言保留。旧测试仅将非法 ZIP fixture 改为成熟库生成合法文件，未改断言。
 
-依据仍为固定 cd47a47 的 `api/core/workflow/nodes/document_extractor/node.py`，`DocumentExtractorNode._run`、`_extract_text_from_file`、`_extract_text_from_docx`、`_extract_text_from_excel`。新增 `tests/engine-extraction.test.mjs` 先真实失败（alpha 字符串 vs 数组），再通过真实 workflowEngine.start 的数组、完整长文本、PDF/Office、远程 PDF、失败语义断言；旧测试断言未动。TLS 4651731 已复核并复跑真实引擎测试通过，false 单请求 curl --insecure，true/缺省仍校验证书，null 明确失败。start.config 在固定版不存在，不列成待实现字段。
+部署：运行 `./scripts/install-extraction.sh`；依赖装入插件新目录 `.vendor-extraction`，已存在即拒绝覆盖。指定 `DIFY_RUNTIME_PYTHON` 选择 Python，`DIFY_EXTRACTION_VENDOR` 选择新目录，或用 `DIFY_PYTHONPATH` 指向已配依赖。`requirements-extraction.txt` 固定依赖，运行时不隐式安装。缺库明确报安装方法。没有安装 unstructured。旧 DOC/PPT/PPTX/EPUB/EML/MSG 完整官方转换链仍为 S 子项；XLS 还需 xlrd 等按格式配置，未验证。OCR 不承诺。每文件输出上限仍为 4 MiB 子进程传输限制，超限明确失败，不静默截断。
+
+TLS 4651731 已复核且真实引擎测试通过：false 单请求 curl --insecure，true/缺省校验证书，null 明确失败。

@@ -9,15 +9,7 @@ const cwd = mkdtempSync(join(process.cwd(), '.tmp-extraction-'))
 writeFileSync(join(cwd, 'a.txt'), 'alpha')
 writeFileSync(join(cwd, 'b.txt'), '')
 writeFileSync(join(cwd, 'long.txt'), 'x'.repeat(2_010_000))
-execFileSync('python3', ['-c', `import fitz,zipfile,sys
-from pathlib import Path
-p=Path(sys.argv[1]); d=fitz.open(); page=d.new_page(); page.insert_text((72,72),'Actual PDF'); d.save(p/'real.pdf')
-with zipfile.ZipFile(p/'real.docx','w') as z: z.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Actual Office</w:t></w:r></w:p></w:body></w:document>')
-with zipfile.ZipFile(p/'real.xlsx','w') as z:
- z.writestr('xl/workbook.xml','<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>')
- z.writestr('xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>')
- z.writestr('xl/worksheets/sheet1.xml','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row><c r="A1" t="inlineStr"><is><t>Name</t></is></c></row><row><c r="A2" t="inlineStr"><is><t>Ada</t></is></c></row></sheetData></worksheet>')
-`, cwd])
+execFileSync(process.env.DIFY_RUNTIME_PYTHON ?? 'python3', ['tests/helpers/extraction-reference.py', cwd], { env: { ...process.env, PYTHONPATH: [join(process.cwd(), '.vendor-extraction'), process.env.DIFY_PYTHONPATH].filter(Boolean).join(':') } })
 const { readFileSync } = await import('node:fs')
 const server = createServer((req,res) => { if(req.url === '/missing.pdf') {res.writeHead(404);res.end('missing');return} res.setHeader('content-type','application/pdf'); res.end(readFileSync(join(cwd,'real.pdf'))) })
 await new Promise(r => server.listen(0,'127.0.0.1',r))

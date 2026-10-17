@@ -1650,7 +1650,7 @@ async function executeDocumentExtractor(ctx, spec, request, env) {
         extension ||= extname(path)
       }
       const proc = await runChild([env.python, join(dirname(fileURLToPath(import.meta.url)), 'extract-document.py')], {
-        cwd: workspaceRoot, env: { ...process.env, ...(env.pythonPath ? { PYTHONPATH: [env.pythonPath, process.env.PYTHONPATH].filter(Boolean).join(':') } : {}) },
+        cwd: workspaceRoot, env: { ...process.env, ...({ PYTHONPATH: [process.env.DIFY_EXTRACTION_VENDOR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '.vendor-extraction'), env.pythonPath, process.env.PYTHONPATH].filter(Boolean).join(':') }) },
         input: JSON.stringify({ bytes: bytes.toString('base64'), extension: extension ?? '' }), timeoutMs: 120_000, signal: request.signal,
       })
       if (proc.code !== 0 || proc.aborted || proc.timedOut || proc.spawnError) throw new Error(`extraction process failed (output limit 4 MiB, timeout 120s): ${proc.spawnError ?? proc.stderr ?? proc.code}`)
@@ -1658,7 +1658,7 @@ async function executeDocumentExtractor(ctx, spec, request, env) {
       if (!result.ok) throw new Error(`${name}: ${result.error}`)
       extracted.push({ name, text: result.text, engine: result.engine })
     }
-    return { ok: true, outputs: { text: Array.isArray(files) ? extracted.map(x => x.text) : extracted[0].text, files: extracted, count: extracted.length }, meta: { extracted: extracted.length, failed: 0, engine: 'alternative-extraction', ocr: false, warning: 'extraction.alternative-engine' } }
+    return { ok: true, outputs: { text: Array.isArray(files) ? extracted.map(x => x.text) : extracted[0].text, files: extracted, count: extracted.length }, meta: { extracted: extracted.length, failed: 0, engine: 'fixed-official-extractors', ocr: false } }
   } catch (error) {
     return { ok: false, error: `document-extractor ${spec.nodeId}: ${error.message}` }
   }
