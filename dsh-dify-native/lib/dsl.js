@@ -467,6 +467,33 @@ export function buildIR(parsed) {
     for (const child of container.children) childOf.set(child.id, container.id)
   }
 
+  // A nested container may omit its own parent metadata even though its
+  // incoming edge starts at an explicitly owned body node. Infer only an
+  // unambiguous owner, never override explicit metadata or create a cycle.
+  // Repeat so deeper nesting can inherit an owner inferred in this pass.
+  let inferredParent
+  do {
+    inferredParent = false
+    for (const nested of containers.values()) {
+      if (childOf.has(nested.id) || declaredParent(nested.node) !== undefined) continue
+      const owners = new Set(edgePairs
+        .filter((edge) => edge.target === nested.id && childOf.has(edge.source))
+        .map((edge) => childOf.get(edge.source)))
+      if (owners.size !== 1) continue
+      const owner = [...owners][0]
+      let ancestor = owner
+      const seen = new Set()
+      while (ancestor !== undefined && ancestor !== nested.id && !seen.has(ancestor)) {
+        seen.add(ancestor)
+        ancestor = childOf.get(ancestor)
+      }
+      if (ancestor !== undefined) continue
+      containers.get(owner).children.push(nested.node)
+      childOf.set(nested.id, owner)
+      inferredParent = true
+    }
+  } while (inferredParent)
+
   for (const container of containers.values()) {
     const childIds = new Set(container.children.map((child) => child.id))
     container.innerEdges = edgePairs.filter((edge) => childIds.has(edge.source) && childIds.has(edge.target))
@@ -1701,7 +1728,8 @@ export function compileGraph(parsed, options = {}) {
           continue
         }
         const childGuard = guardFor(child, bodyUnit, bodyIncoming)
-        if (HOST_KINDS.has(child.kind)) emitHost(child, bodyUnit, childGuard, bodyLevel)
+        if (CONTAINER_KINDS.has(child.kind)) emitContainer(child, bodyUnit, childGuard, bodyLevel)
+        else if (HOST_KINDS.has(child.kind)) emitHost(child, bodyUnit, childGuard, bodyLevel)
         else emitPure(child, bodyUnit, childGuard, bodyLevel)
       }
       Object.assign(scope, previousScope)
