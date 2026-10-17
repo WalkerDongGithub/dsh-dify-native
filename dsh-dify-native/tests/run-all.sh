@@ -13,6 +13,7 @@ for test in \
   tests/session-memory.test.mjs \
   tests/sys-vars.test.mjs \
   tests/provider.test.mjs \
+  tests/structured-output.test.mjs \
   tests/translation-script.test.mjs
 do
   echo "== $test"

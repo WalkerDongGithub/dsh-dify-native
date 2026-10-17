@@ -327,4 +327,89 @@ workflow:
   console.log('ok 10 — code dependencies reach the provider request')
 }
 
+// 11. llm `structured_output` reaches the node request as a compiled contract,
+//     and is not reported as a dropped field.
+{
+  const yml = `
+app:
+  name: so-probe
+  mode: workflow
+kind: app
+version: 0.1.0
+workflow:
+  graph:
+    nodes:
+      - id: s
+        data:
+          type: start
+          variables:
+            - variable: q
+              type: string
+              required: true
+      - id: l
+        data:
+          type: llm
+          model:
+            provider: zai
+            name: glm-4.5-air
+          prompt_template:
+            - role: user
+              text: '{{#s.q#}}'
+          structured_output_enabled: true
+          structured_output:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                age: { type: number }
+              required: [name, age]
+      - id: e
+        data:
+          type: end
+          outputs:
+            - variable: out
+              value_selector: [l, text]
+    edges:
+      - { source: s, target: l }
+      - { source: l, target: e }
+`
+  const parsed = parseDifyDsl(yml)
+  const compiled = compileGraph(parsed)
+  assert.match(compiled.script, /"structuredOutput":\{"enabled":true,"schema":/, 'the schema must reach the node request')
+  assert.match(compiled.script, /"required":\["name","age"\]/)
+  const inspection = inspectGraph(parsed)
+  for (const field of ['l:structured_output_enabled', 'l:structured_output']) {
+    assert.equal(
+      (inspection.diagnostics ?? []).filter((row) => row.subject === field).length,
+      0,
+      `${field} is implemented, so it must not be reported as a dropped field`,
+    )
+  }
+  console.log('ok 11 — llm structured_output reaches the provider request')
+}
+
+// 12. structured_output is only forwarded when it is both enabled and has a
+//     schema; a disabled node must not silently gain a contract.
+{
+  const base = (flag, schema) => `
+app: { name: so-off, mode: workflow }
+workflow:
+  graph:
+    nodes:
+      - { id: s, data: { type: start, variables: [{ variable: q, required: true }] } }
+      - id: l
+        data:
+          type: llm
+          model: { provider: zai, name: glm-4.5-air }
+          prompt_template: [{ role: user, text: '{{#s.q#}}' }]
+          ${flag ? 'structured_output_enabled: true' : ''}
+          ${schema ? 'structured_output: { schema: { type: object } }' : ''}
+      - { id: e, data: { type: end, outputs: [{ variable: out, value_selector: [l, text] }] } }
+    edges: [{ source: s, target: l }, { source: l, target: e }]
+`
+  assert.doesNotMatch(compileGraph(parseDifyDsl(base(false, true))).script, /"structuredOutput"/, 'a disabled flag must not forward a schema')
+  assert.doesNotMatch(compileGraph(parseDifyDsl(base(true, false))).script, /"structuredOutput"/, 'enabled without a schema forwards nothing')
+  console.log('ok 12 — structured_output is forwarded only when enabled with a schema')
+}
+
 console.log('DSL TESTS OK')

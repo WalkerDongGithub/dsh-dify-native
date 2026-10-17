@@ -122,7 +122,7 @@ const CONSUMED_FIELDS = {
   start: new Set(['variables']),
   end: new Set(['outputs']),
   answer: new Set(['answer', 'variables']),
-  llm: new Set(['model', 'prompt_template', 'variables', 'context', 'vision', 'memory']),
+  llm: new Set(['model', 'prompt_template', 'variables', 'context', 'vision', 'memory', 'structured_output_enabled', 'structured_output']),
   code: new Set(['code_language', 'code', 'variables', 'outputs', 'dependencies']),
   'if-else': new Set(['cases', 'logical_operator']),
   'question-classifier': new Set(['model', 'classes', 'query_variable_selector', 'instruction', 'instructions', 'topics', 'memory']),
@@ -1163,6 +1163,13 @@ export function compileGraph(parsed, options = {}) {
       // Memory is fed from the harness session log at execution time; only the
       // node's declaration travels in the spec.
       if (data.memory !== null && typeof data.memory === 'object') spec.memory = data.memory
+      // Dify `structured_output`: when enabled, the node promises its `text`
+      // output is a JSON value conforming to `structured_output.schema`. The
+      // host `ctx.llm` exposes no response_format, so the provider enforces the
+      // contract itself (prompt constraint + schema validation + one repair).
+      if (data.structured_output_enabled === true && data.structured_output?.schema !== undefined) {
+        spec.structuredOutput = { enabled: true, schema: data.structured_output.schema }
+      }
     } else if (kind === 'question-classifier') {
       const model = data.model ?? {}
       const params = model.completion_params ?? {}

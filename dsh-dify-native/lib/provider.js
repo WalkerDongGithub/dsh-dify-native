@@ -23,6 +23,7 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import Ajv from 'ajv'
 import { basename, isAbsolute, join } from 'node:path'
 import { applyMemoryWindow, deriveChatHistory, memoryOptions, toPromptText } from './session-history.js'
 import { renderJinja } from './jinja.js'
@@ -519,9 +520,27 @@ async function executeLlm(ctx, spec, request, env) {
   if (call.text.length === 0 && call.reasoning.length === 0) {
     return { ok: false, error: `llm node ${spec.nodeId} produced no text (route ${route.provider}/${route.model})` }
   }
+  // Dify `structured_output`: the node's `text` output is a JSON document that
+  // must satisfy the declared schema. A violation is retried once with the
+  // validator's complaint appended, then reported — never silently passed on.
+  let structuredMeta
+  let finalText = call.text
+  if (spec.structuredOutput?.enabled === true && spec.structuredOutput.schema !== undefined) {
+    const checked = await enforceStructuredOutput(ctx, request, route, spec, {
+      messages,
+      system,
+      temperature: spec.temperature,
+      maxTokens: spec.maxTokens,
+      note,
+      text: call.text,
+    })
+    if (!checked.ok) return { ok: false, error: `llm node ${spec.nodeId} structured_output: ${checked.error}` }
+    finalText = checked.text
+    structuredMeta = checked.meta
+  }
   return {
     ok: true,
-    outputs: { text: call.text, usage: call.usage, reasoning_content: call.reasoning },
+    outputs: { text: finalText, usage: call.usage, reasoning_content: call.reasoning },
     meta: {
       provider: route.provider,
       model: route.model,
@@ -530,8 +549,81 @@ async function executeLlm(ctx, spec, request, env) {
       finish: call.finish,
       ...(memoryMeta !== undefined ? { memory: memoryMeta } : {}),
       ...(call.note !== undefined ? { adapterNote: call.note } : {}),
+      ...(structuredMeta !== undefined ? { structuredOutput: structuredMeta } : {}),
     },
   }
+}
+
+/**
+ * Enforce Dify's `structured_output` contract around one LLM answer.
+ *
+ * The host `GenerateOptions` has no response_format / json_schema field, so the
+ * constraint is expressed in the conversation (an instruction plus the schema)
+ * and verified with `ajv` — the validator dsh already ships, so no new
+ * dependency. One repair round is attempted; a second failure is reported.
+ *
+ * @returns `{ ok: true, text, meta }` with the validated JSON text, or
+ *          `{ ok: false, error }` describing why the contract could not be met.
+ */
+async function enforceStructuredOutput(ctx, request, route, spec, initial) {
+  const ajv = new Ajv({ allErrors: true, strict: false })
+  let validate
+  try {
+    validate = ajv.compile(spec.structuredOutput.schema)
+  } catch (error) {
+    return { ok: false, error: `declared schema is not valid JSON Schema: ${error?.message ?? String(error)}` }
+  }
+  const describe = (errors) =>
+    (errors ?? []).slice(0, 5).map((item) => `${item.instancePath || '/'} ${item.message}`).join('; ')
+  const instruction = {
+    role: 'system',
+    content: [
+      {
+        type: 'text',
+        text:
+          'Reply with a single JSON document and nothing else — no prose, no markdown fences.\n' +
+          `The document MUST validate against this JSON Schema:\n${JSON.stringify(spec.structuredOutput.schema)}`,
+      },
+    ],
+  }
+  const attempt = async (text) => {
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch (error) {
+      return { ok: false, reason: `answer is not valid JSON: ${error?.message ?? String(error)}` }
+    }
+    if (!validate(parsed)) return { ok: false, reason: `answer does not match the schema: ${describe(validate.errors)}` }
+    return { ok: true, text: JSON.stringify(parsed) }
+  }
+  const first = await attempt(initial.text)
+  if (first.ok) return { ok: true, text: first.text, meta: { validated: true, repaired: false } }
+
+  const repairMessages = [
+    instruction,
+    ...initial.messages,
+    { role: 'assistant', content: [{ type: 'text', text: initial.text }] },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `That reply broke the required schema (${first.reason}). Reply again with only the corrected JSON document.`,
+        },
+      ],
+    },
+  ]
+  const retry = await streamLlm(ctx, request, route, {
+    messages: repairMessages,
+    system: initial.system,
+    temperature: initial.temperature,
+    maxTokens: initial.maxTokens,
+    note: initial.note,
+  })
+  if (!retry.ok) return { ok: false, error: `repair round failed: ${retry.error}` }
+  const second = await attempt(retry.text)
+  if (second.ok) return { ok: true, text: second.text, meta: { validated: true, repaired: true } }
+  return { ok: false, error: `no schema-valid JSON after one repair round (${first.reason}; then ${second.reason})` }
 }
 
 /**
