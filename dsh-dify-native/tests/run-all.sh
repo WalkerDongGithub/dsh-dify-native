@@ -7,6 +7,7 @@ for test in \
   tests/dsl.test.mjs \
   tests/nodes.test.mjs \
   tests/nodes-new.test.mjs \
+  tests/control-semantics.test.mjs \
   tests/coverage.test.mjs \
   tests/diagnostics.test.mjs \
   tests/template-jinja.test.mjs \

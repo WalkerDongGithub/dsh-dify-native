@@ -1433,13 +1433,26 @@ export function compileGraph(parsed, options = {}) {
       return
     }
     if (kind === 'variable-aggregator') {
-      const values = (data.variables ?? []).map((selector) => selectorExpr(selector, scope))
-      const outputType = data.output_type ?? 'string'
-      const fallback = outputType === 'array' ? '[]' : '""'
+      // Dify 1.9.1 VariableAggregatorNode._run selects the first existing
+      // Segment (including NoneSegment), without inspecting its value/type.
+      // JS undefined represents an absent pool entry; null is a present value.
+      const groups = data.advanced_settings?.group_enabled === true
+        ? (data.advanced_settings.groups ?? [])
+        : [{ variables: data.variables ?? [] }]
       lines.push(`${pad}if (${guard}) {`)
-      lines.push(`${pad}  const __pick = [${values.join(', ')}].find((v) => v !== undefined && v !== null)`)
+      lines.push(`${pad}  const __aggregated = {}`)
+      for (const group of groups) {
+        const values = (group.variables ?? []).map((selector) => selectorExpr(selector, scope))
+        lines.push(`${pad}  {`)
+        lines.push(`${pad}    const __pick = [${values.join(', ')}].find((v) => v !== undefined)`)
+        const target = data.advanced_settings?.group_enabled === true
+          ? `__aggregated[${JSON.stringify(group.group_name)}] = { output: __pick }`
+          : '__aggregated.output = __pick'
+        lines.push(`${pad}    if (__pick !== undefined) ${target}`)
+        lines.push(`${pad}  }`)
+      }
       lines.push(
-        `${pad}  ${variable} = { ok: true, kind: 'variable-aggregator', title: ${JSON.stringify(node.title)}, outputs: { output: __pick === undefined ? ${fallback} : __pick } }`,
+        `${pad}  ${variable} = { ok: true, kind: 'variable-aggregator', title: ${JSON.stringify(node.title)}, outputs: __aggregated }`,
       )
       lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
       lines.push(`${pad}  ${scope.ran}[${JSON.stringify(node.id)}] = true`)
