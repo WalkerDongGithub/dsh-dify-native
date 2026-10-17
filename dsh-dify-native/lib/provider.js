@@ -22,7 +22,7 @@
  */
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import Ajv from 'ajv'
 import { basename, extname, isAbsolute, join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -220,6 +220,7 @@ export function createDifyNodeProvider(ctx, options = {}) {
   // Declarative tool contracts: directories scanned for provider/tool YAML.
   const toolRoots = options.toolRoots ?? (process.env.DIFY_TOOLS_ROOT ?? '').split(':').filter((item) => item.length > 0)
   const toolRegistry = options.toolRegistry ?? createToolRegistry(toolRoots)
+  const datasourceRegistry = createToolRegistry((process.env.DIFY_DATASOURCES_ROOT ?? '').split(':').filter(Boolean))
   // Exact harness-tool names a workflow may call directly (opt-in passthrough).
   const toolPassthrough = options.toolPassthrough ?? process.env.DIFY_TOOL_PASSTHROUGH ?? ''
 
@@ -265,6 +266,7 @@ export function createDifyNodeProvider(ctx, options = {}) {
             documentRoot,
             toolAllow,
             toolRegistry,
+            datasourceRegistry,
             toolPassthrough,
           })
         } catch (error) {
@@ -1672,31 +1674,53 @@ async function executeDocumentExtractor(ctx, spec, request, env) {
 async function executeDatasource(ctx, spec, request, env) {
   const workspaceRoot = spec.workspaceRoot ?? request.parent?.session?.header?.cwd ?? process.cwd()
   const parameters = spec.parameters ?? {}
-  const configured = parameters.path ?? parameters.file ?? parameters.url ?? spec.datasourceName
-  if (configured === undefined || configured === null || stringify(configured).length === 0) {
-    return { ok: false, error: `datasource ${spec.nodeId} has no local path configured (parameters.path)` }
+  const type = spec.datasourceType
+  const info = spec.datasourceInfo
+  const makeFile = (descriptor) => {
+    const path = resolveDocumentPath(descriptor?.path ?? descriptor?.local_path, workspaceRoot, env)
+    if (!path || !statSync(path).isFile()) throw new Error('local_file requires sys.datasource_info.file.path pointing to a real workspace file; Dify upload IDs are not local paths')
+    return { ...descriptor, path, filename: descriptor.filename ?? basename(path), extension: extname(path), mime_type: descriptor.mime_type ?? 'application/octet-stream', size: statSync(path).size, type: 'custom', transfer_method: 'local_file', related_id: descriptor.related_id ?? '', url: descriptor.url ?? '' }
   }
+  if (type === 'website_crawl') {
+    if (!info || typeof info !== 'object' || Array.isArray(info)) return { ok: false, error: `datasource ${spec.nodeId}: sys.datasource_info must be an object` }
+    return { ok: true, outputs: { ...info, datasource_type: type }, meta: { engine: 'website-info', native_plugin: false } }
+  }
+  if (type === 'local_file') {
+    try { return { ok: true, outputs: { file: makeFile(info?.file), datasource_type: type }, meta: { engine: 'local-file-reference', native_plugin: false } } }
+    catch (error) { return { ok: false, error: `datasource ${spec.nodeId}: ${error.message}` } }
+  }
+  const localRecords = !type && spec.provider === 'local/file' && (!spec.providerType || spec.providerType === 'builtin')
+  if (!localRecords) {
+    const contract = env.datasourceRegistry.get(spec.provider, spec.datasourceName)
+    if (!contract) return { ok: false, error: `datasource ${spec.nodeId}: ${spec.provider}/${spec.datasourceName} is not declared in DIFY_DATASOURCES_ROOT; native plugin daemon not available. Plugin parameters are never interpreted as local files.` }
+    const response = await executeContract(contract, { parameters: { ...parameters, datasource_info: info }, configurations: spec.configurations ?? {} }, { fetch: globalThis.fetch, signal: request.signal })
+    if (!response.ok) return { ok: false, error: `datasource ${spec.nodeId}: ${response.error}` }
+    const mapped = { ...response.outputs }
+    // The contract explicitly maps the variables emitted by the remote source.
+    delete mapped.text; delete mapped.result; delete mapped.json
+    for (const key of ['text', 'result', 'json']) if (Object.hasOwn(contract.response?.variables ?? {}, key)) mapped[key] = response.outputs[key]
+    if (type === 'online_drive') {
+      if (!mapped.file || typeof mapped.file !== 'object') return { ok: false, error: `datasource ${spec.nodeId}: online_drive contract must map file` }
+      mapped.datasource_type = type
+    }
+    return { ok: true, outputs: mapped, meta: { ...response.meta, engine: 'declarative-datasource-bridge', native_plugin: false } }
+  }
+  const configured = parameters.path
+  if (typeof configured !== 'string' || !configured) return { ok: false, error: `datasource ${spec.nodeId}: local/file records extension requires parameters.path` }
   const path = resolveDocumentPath(configured, workspaceRoot, env)
-  if (path === undefined) return { ok: false, error: `datasource ${spec.nodeId} path is outside the workspace: ${stringify(configured)}` }
-  if (!existsSync(path)) return { ok: false, error: `datasource ${spec.nodeId} file not found: ${path}` }
+  if (!path) return { ok: false, error: `datasource ${spec.nodeId}: path outside workspace` }
   let records = []
   try {
-    const content = readFileSync(path, 'utf8').slice(0, 4_000_000)
-    if (/\.jsonl?$/i.test(path) || /^\s*[[{]/.test(content)) {
-      try {
-        const parsed = JSON.parse(content)
-        records = Array.isArray(parsed) ? parsed : [parsed]
-      } catch {
-        records = content.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
-          try {
-            return JSON.parse(line)
-          } catch {
-            return { line }
-          }
-        })
-      }
+    const bytes = readFileSync(path)
+    if (bytes.includes(0)) throw new Error('binary content cannot be records')
+    const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    if (/\.jsonl$/i.test(path)) {
+      records = content.split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line))
+    } else if (/\.json$/i.test(path) || /^\s*[[{]/.test(content)) {
+      const parsed = JSON.parse(content)
+      records = Array.isArray(parsed) ? parsed : [parsed]
     } else {
-      records = content.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => ({ line }))
+      records = content.split(/\r?\n/).filter(line => line.trim()).map(line => ({ line }))
     }
   } catch (error) {
     return { ok: false, error: `datasource ${spec.nodeId} cannot read ${path}: ${error?.message ?? String(error)}` }

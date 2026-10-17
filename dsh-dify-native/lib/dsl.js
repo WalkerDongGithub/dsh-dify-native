@@ -134,7 +134,7 @@ const CONSUMED_FIELDS = {
   'parameter-extractor': new Set(['model', 'query', 'query_variable_selector', 'instruction', 'reasoning_mode', 'parameters', 'memory']),
   'document-extractor': new Set(['is_array_file', 'variable_selector']),
   'list-operator': new Set(['variable', 'filter_by', 'order_by', 'limit']),
-  datasource: new Set(['provider_name', 'provider_id', 'provider_type', 'datasource_name', 'datasource_label', 'datasource_parameters']),
+  datasource: new Set(['provider_name', 'provider_id', 'provider_type', 'datasource_name', 'datasource_label', 'datasource_parameters', 'datasource_configurations', 'plugin_id', 'plugin_unique_identifier']),
   'human-input': new Set(['user_actions', 'form_content', 'inputs', 'timeout', 'timeout_unit']),
   iteration: new Set(['iterator_selector', 'output_selector', 'is_parallel', 'parallel_nums', 'error_handle_mode', 'start_node_id', 'output_type', 'flatten_output']),
   loop: new Set(['loop_count', 'loop_count_selector', 'break_conditions', 'logical_operator', 'error_handle_mode', 'start_node_id']),
@@ -1089,7 +1089,7 @@ export function compileGraph(parsed, options = {}) {
   // `systemVariables` in index.js); when absent they stay undefined, which the
   // empty-string defaults below absorb.
   lines.push(
-    `__vars.sys = { query: args['sys.query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '', conversation_id: args['sys.conversation_id'] ?? '', dialogue_count: args['sys.dialogue_count'] ?? 0, workflow_run_id: args['sys.workflow_run_id'] ?? '', timestamp: args['sys.timestamp'] ?? 0 }`,
+    `__vars.sys = { query: args['sys.query'] ?? '', files: args['sys.files'] ?? [], user_id: args['sys.user_id'] ?? '', app_id: args['sys.app_id'] ?? '', workflow_id: args['sys.workflow_id'] ?? '', conversation_id: args['sys.conversation_id'] ?? '', dialogue_count: args['sys.dialogue_count'] ?? 0, workflow_run_id: args['sys.workflow_run_id'] ?? '', timestamp: args['sys.timestamp'] ?? 0, datasource_type: args['sys.datasource_type'], datasource_info: args['sys.datasource_info'] }`,
   )
   // `entity` is what Dify calls the item of a list-operator / iteration body in
   // some exports; keep the common ones resolvable.
@@ -1402,6 +1402,9 @@ export function compileGraph(parsed, options = {}) {
     }
     if (kind === 'datasource') {
       lines.push(`${pad}  ${reqVar}.parameters = ${parameterObjectExpr(data.datasource_parameters, scope)}`)
+      lines.push(`${pad}  ${reqVar}.configurations = ${parameterObjectExpr(data.datasource_configurations, scope)}`)
+      lines.push(`${pad}  ${reqVar}.datasourceType = __vars.sys.datasource_type`)
+      lines.push(`${pad}  ${reqVar}.datasourceInfo = __vars.sys.datasource_info`)
     }
     if (kind === 'human-input') {
       // A synchronous run resolves the human step from the run args, then from

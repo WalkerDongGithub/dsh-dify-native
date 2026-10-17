@@ -53,7 +53,7 @@ form-demo 的聊天分支使用解析后 DSL 中预置的 conversation 默认值
 | simplified | knowledge-retrieval | 真实 grep 本地目录 + 词法排序，非 embedding 检索；使用帮助分支实际执行并检查返回记录 |
 | simplified | agent | 单次模型调用，不执行自治工具循环；样本中实际执行并检查 toolsExecuted=[] |
 | 固定提取函数（有限格式） | document-extractor | PDFium 4.30.0、python-docx、pandas/openpyxl；8 种格式与官方纯函数逐字差分，数组/远程字节/失败已验；旧格式仍有 S 子项 |
-| simplified | datasource / datasource-empty | 本地 JSON、JSONL、文本读取，不加载 Dify datasource 插件 |
+| 有限部署协议 | datasource / datasource-empty | sys 驱动 file/website 输出；声明式远端变量适配，插件参数不猜路径；records 扩展保留，原生插件仍 S |
 | simplified | human-input | 从参数选择动作，或选择第一个动作；不暂停等待真人。额外真实引擎用例分别执行 approve / reject 并检查最终值 |
 | placeholder | knowledge-index | 实际被调度，但不写向量库；额外用例断言最终 status=not_written、indexed=0 |
 | passthrough / 非能力实现 | 未知 generic、custom-note | 未知类型仅透传并告警，note 是标注；不能视为业务节点能力 |
@@ -92,7 +92,7 @@ DIFY_E2E_EVIDENCE=/tmp/dify-e2e-evidence.json node tests/engine-e2e.test.mjs
 
 ## 尚未完成
 
-- 真实 Dify datasource 插件/其他导出参数形态未覆盖；本次仅证明样本的本地 path 契约。
+- datasource 的真实 Dify 插件、认证云账户和远端文件生命周期仍为 S 子项；已证明 sys 本地文件/网站信息与声明式 HTTP 适配，见 [部署协议](datasource-contract.md)。
 - `http-request.ssl_verify` 已在 4651731 修复并真实验证；`start.config` 固定官方版本无此字段，不赋予猜测语义。
 - 表单 conversation 变量跨 run 持久化，以及公网 Jina 部署仍需处理。
 - file 输入的“multiple values for keyword argument”未复现；新增测试证明 dict 原样传入，未宣称修复该未复现错误。
@@ -105,3 +105,5 @@ DIFY_E2E_EVIDENCE=/tmp/dify-e2e-evidence.json node tests/engine-e2e.test.mjs
 部署：运行 `./scripts/install-extraction.sh`；依赖装入插件新目录 `.vendor-extraction`，已存在即拒绝覆盖。指定 `DIFY_RUNTIME_PYTHON` 选择 Python，`DIFY_EXTRACTION_VENDOR` 选择新目录，或用 `DIFY_PYTHONPATH` 指向已配依赖。`requirements-extraction.txt` 固定依赖，运行时不隐式安装。缺库明确报安装方法。没有安装 unstructured。旧 DOC/PPT/PPTX/EPUB/EML/MSG 完整官方转换链仍为 S 子项；XLS 还需 xlrd 等按格式配置，未验证。OCR 不承诺。每文件输出上限仍为 4 MiB 子进程传输限制，超限明确失败，不静默截断。
 
 TLS 4651731 已复核且真实引擎测试通过：false 单请求 curl --insecure，true/缺省校验证书，null 明确失败。
+
+#4 datasource / datasource-empty 基础项修复：真实引擎先复现 sys 被忽略而把 datasource_name 当文件路径，再通过 file/website/remote-contract/拒绝猜路径断言。另先复现损坏 JSONL 被吞错，再修复到节点失败。`tests/engine-datasource.test.mjs`，旧断言保留。

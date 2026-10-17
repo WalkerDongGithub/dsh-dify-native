@@ -24,7 +24,8 @@ for test in \
   tests/engine-nested.test.mjs \
   tests/engine-http-tls.test.mjs \
   tests/engine-extraction.test.mjs \
-  tests/engine-extraction-differential.test.mjs
+  tests/engine-extraction-differential.test.mjs \
+  tests/engine-datasource.test.mjs
 do
   echo "== $test"
   node "$test"

@@ -456,3 +456,5 @@ ALL TESTS OK
 #1 基础项已修但整组仍有 S 子项：数组/单文件形状、任一文件失败、完整文本、远程 bytes 已验证。02d4101 的手写 OOXML 与 fitz 方案被纠正：使用 pypdfium2==4.30.0、python-docx、pandas/openpyxl，以及固定 cd47a47 纯函数，DOCX 表格/换行、YAML/properties/VTT/CSV/JSON 转换、Excel 多 sheet/数字/公式缓存逐字对标。AST 参考源码保存于 tests/fixtures/dify-cd47a47-document-extractor.py，真实差分回归 tests/engine-extraction-differential.test.mjs。初次差分实际失败：PDF 多一个换行；修复后 8 种格式逐字通过。依赖安装、S 余项及边界见 capability-report 的 Extraction 修正段；未因现代 Office 成功宣称旧格式完成。
 
 TLS 4651731 已复核；start.config 在固定版本不存在，不凭空实现。#2/#3 RAG 继续按用户要求暂停。
+
+#4 基础项已修（2 个节点名）：系统变量、File/网站形状、独立声明式远端协议与插件边界；JSONL 吞错修复。原生 datasource 插件/认证源/文件存储仍 S 子项，见 datasource-contract.md，未标全兼容。
