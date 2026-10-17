@@ -1003,6 +1003,17 @@ function httpFailure(spec, message, errorType = 'network_error') {
  * `curl`, so this plugin still owns no HTTP client.
  */
 async function executeHttp(ctx, spec, request, env) {
+  // Dify's `ssl_verify` is `bool | None` and ssrf_proxy rejects anything but a
+  // boolean. An absent key means the deployment default (verification on); an
+  // explicit non-boolean — notably `null` — is an authoring error, never a
+  // silent fallback to either policy.
+  const sslVerify = spec.sslVerify === undefined ? true : spec.sslVerify
+  if (typeof sslVerify !== 'boolean') {
+    return {
+      ok: false,
+      error: `http node ${spec.nodeId}: ssl_verify must be a boolean, got ${spec.sslVerify === null ? 'null' : JSON.stringify(sslVerify)} (omit the field to use the deployment default)`,
+    }
+  }
   let url
   try {
     url = httpRequestUrl(spec)
@@ -1026,7 +1037,10 @@ async function executeHttp(ctx, spec, request, env) {
   const body = spec.body ?? { type: 'none' }
   const hasBody = body.type !== 'none'
   const web = typeof ctx.get === 'function' ? ctx.get('web') : undefined
+  // `ctx.web.fetch` exposes no certificate policy, so verification-off requests
+  // take the curl path (with `--insecure`) instead of failing on that seam.
   if (
+    sslVerify &&
     (method === 'GET' || method === 'HEAD') &&
     !hasBody &&
     headers.size === 0 &&
@@ -1047,11 +1061,11 @@ async function executeHttp(ctx, spec, request, env) {
       return httpFailure(spec, `http node ${spec.nodeId} ctx.web.fetch failed: ${error?.message ?? String(error)}`)
     }
   }
-  return executeHttpCurl(ctx, spec, request, { method, url, headers })
+  return executeHttpCurl(ctx, spec, request, { method, url, headers, sslVerify })
 }
 
 /** Run one HTTP request through the harness sandbox and the system curl. */
-async function executeHttpCurl(ctx, spec, request, { method, url, headers }) {
+async function executeHttpCurl(ctx, spec, request, { method, url, headers, sslVerify = true }) {
   const sandbox = typeof ctx.get === 'function' ? ctx.get('sandbox') : undefined
   if (sandbox === undefined || typeof sandbox.confine !== 'function') {
     return httpFailure(spec, 'ctx.sandbox is unavailable; refusing to run http-request unconfined')
@@ -1094,6 +1108,9 @@ async function executeHttpCurl(ctx, spec, request, { method, url, headers }) {
       '--write-out',
       '%{http_code}',
     ]
+    // `ssl_verify: false` disables verification for this one curl invocation;
+    // process-wide TLS switches (NODE_TLS_REJECT_UNAUTHORIZED) are never touched.
+    if (!sslVerify) argv.push('--insecure')
     for (const [name, value] of headers) argv.push('--header', `${name}: ${value}`)
     if (payload !== undefined) argv.push('--data-binary', '@-')
     argv.push(url.toString())

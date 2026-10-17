@@ -126,7 +126,7 @@ const CONSUMED_FIELDS = {
   code: new Set(['code_language', 'code', 'variables', 'outputs', 'dependencies']),
   'if-else': new Set(['cases', 'logical_operator']),
   'question-classifier': new Set(['model', 'classes', 'query_variable_selector', 'instruction', 'instructions', 'topics', 'memory']),
-  'http-request': new Set(['method', 'url', 'headers', 'params', 'body', 'authorization', 'error_strategy', 'default_value', 'timeout']),
+  'http-request': new Set(['method', 'url', 'headers', 'params', 'body', 'authorization', 'error_strategy', 'default_value', 'timeout', 'ssl_verify']),
   tool: new Set(['provider_id', 'provider_name', 'provider_type', 'tool_name', 'tool_label', 'tool_parameters', 'tool_configurations', 'settings']),
   'knowledge-retrieval': new Set(['dataset_ids', 'query_variable_selector', 'retrieval_setting', 'single_retrieval_config', 'multiple_retrieval_config']),
   'knowledge-index': new Set(['dataset_id', 'index_chunk_variable_selector', 'keyword_number']),
@@ -1235,6 +1235,11 @@ export function compileGraph(parsed, options = {}) {
       spec.method = String(data.method ?? 'get').toUpperCase()
       spec.errorStrategy = String(data.error_strategy ?? 'none')
       spec.timeoutMs = httpTimeoutMs(data)
+      // Dify's `ssl_verify` is `bool | None`. A boolean is forwarded as-is; an
+      // explicit `null` is preserved so the provider rejects it (Dify's
+      // ssrf_proxy raises "SSRF client verify flag must be a boolean"); absent
+      // keeps Dify's deployment default, which is verification on.
+      if (data.ssl_verify !== undefined) spec.sslVerify = data.ssl_verify
       spec.headers = []
       spec.params = []
       spec.body = { type: 'none' }

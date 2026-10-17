@@ -21,7 +21,8 @@ for test in \
   tests/translation-script.test.mjs \
   tests/container-scope.test.mjs \
   tests/engine-e2e.test.mjs \
-  tests/engine-nested.test.mjs
+  tests/engine-nested.test.mjs \
+  tests/engine-http-tls.test.mjs
 do
   echo "== $test"
   node "$test"
