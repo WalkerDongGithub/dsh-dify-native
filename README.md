@@ -14,6 +14,7 @@ walker server 上完成的一轮验证的完整归档：插件代码、Dify DSL 
 | `dsh-dify-runtime/` | 主插件：Dify DSL 解析 → IR → 确定性 DAG 调度；Python runtime + JS 插件壳 |
 | `dsh-dify-native/` | 原生桥接方案：复用 dsh 的 workflowEngine / subagents / llm / sandbox，不自写调度器 |
 | `dsl/` | 真实 Dify 工作流样本（json-repair / translation / seo-slug / jieba / form-demo 等） |
+| `dsl/research/` | 科研向工作流样本（ChatPaper / NotebookLM / DeepResearch / GPT-Researcher / matplotlib），来源与分档见该目录 README |
 | `runs/` | 验证产物：逐节点 trace、IR、运行结果、原生对照结果 |
 | `spikes/`、`harness-spikes/` | 沙箱、workflow engine、离线 DSL 等调研脚本 |
 | `验证报告_*.md` | 两轮验证报告（通路验证、拿来主义重构） |

@@ -1,0 +1,94 @@
+app:
+  description: ''
+  icon: female-student
+  icon_background: '#FBE8FF'
+  mode: completion
+  name: 文献综述写作
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/openai:0.0.13@9caa0421b5519db036aaccdbf1980d1071550767d6c59e9d9388dd386a92e9f6
+kind: app
+model_config:
+  agent_mode:
+    enabled: false
+    max_iteration: 5
+    strategy: function_call
+    tools: []
+  annotation_reply:
+    enabled: false
+  chat_prompt_config: {}
+  completion_prompt_config: {}
+  dataset_configs:
+    datasets:
+      datasets: []
+    retrieval_model: single
+  dataset_query_variable: ''
+  external_data_tools: []
+  file_upload:
+    image:
+      detail: high
+      enabled: false
+      number_limits: 3
+      transfer_methods:
+      - remote_url
+      - local_file
+  model:
+    completion_params:
+      frequency_penalty: 0
+      max_tokens: 512
+      presence_penalty: 0
+      stop: []
+      temperature: 0
+      top_p: 1
+    mode: chat
+    name: gpt-3.5-turbo
+    provider: openai
+  more_like_this:
+    enabled: false
+  opening_statement: ''
+  pre_prompt: '我正在对 {{Topic}} 进行研究。请帮我写一篇关于这个主题的文献综述，包括以下研究方向： {{Direction}}。字数限制在
+    {{Word_Count}}左右。此外，请列出相应的文献来源，包括作者、期刊和发表时间等引文信息。
+
+
+    在文章的相应位置列出参考文献来源的标记，并在文末列出文献详细信息。请引用中文文献。
+
+    例如：中国官员鼓励PTT社区的进一步发展，导致了最近学术文章的爆发。(3)。
+
+    （3） 请参阅2018年5月版《中国：国际期刊》和2019年秋季版《中国政策期刊》中关于智库的特别章节。'
+  prompt_type: simple
+  retriever_resource:
+    enabled: false
+  sensitive_word_avoidance:
+    canned_response: ''
+    enabled: false
+    words: ''
+  speech_to_text:
+    enabled: false
+  suggested_questions: []
+  suggested_questions_after_answer:
+    enabled: false
+  text_to_speech:
+    enabled: false
+  user_input_form:
+  - text-input:
+      default: ''
+      label: 论文主题
+      max_length: 64
+      required: true
+      variable: Topic
+  - text-input:
+      default: ''
+      label: 研究方向
+      max_length: 64
+      required: true
+      variable: Direction
+  - text-input:
+      default: ''
+      label: 字数限制
+      max_length: 48
+      required: true
+      variable: Word_Count
+version: 0.1.5

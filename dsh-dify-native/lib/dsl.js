@@ -231,7 +231,11 @@ function reportTemplateGaps(diagnostics, node) {
 }
 
 function nodeType(node) {
-  return node?.data?.type ?? node?.type
+  // Dify exports canvas comments as `type: custom-note` with an empty
+  // `data.type`; `??` would keep the empty string and fall through to
+  // `generic`, so fall back to the wrapper type when `data.type` is blank.
+  const declared = node?.data?.type
+  return declared === undefined || declared === null || declared === '' ? node?.type : declared
 }
 
 function nodeTitle(node) {
