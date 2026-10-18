@@ -10,6 +10,28 @@
 
 > 判断你自己那张图属于哪一档的方法在[第五节](#五自查先-inspect-再-run)：**先 `dify_native_inspect`，它会把每个节点标成 full / simplified / placeholder / passthrough，再决定要不要 run。**
 
+> **这份 README 就是完整的使用说明。用之前先读完它，不需要问别人"这个能不能用"。**
+> 判断依据都在这里：能力边界、已知降级、每一条的应对方式。README 没写的能力，默认按"不确定"处理——先 `dify_native_inspect`，别猜。
+
+---
+
+## 遇到问题
+
+**本仓库会频繁更新。用之前先 `git pull`。**
+
+发现 bug、和 README 描述不符、或者某个节点行为不对：**直接在本仓库的 Gitea 提 issue**
+<http://127.0.0.1:8443/walker/dsh-dify-runtime/issues>。
+
+提 issue 时带上这几样，能让问题一次定位：
+
+- `dify_native_services` 的输出（说明这个 profile 到底挂了什么）
+- `dify_native_inspect` 对该工作流的输出（说明这张图被判成了什么）
+- 出错的节点 id + 完整错误信息
+- 能复现的最小 `.yml`（脱敏后）
+
+**不要问"这个能不能用"——README 的第二、三节已经按节点列清了。**
+README 说不行而实际能跑，或者 README 说能跑而实际失败，都是 bug，都该提 issue。
+
 如果你是想改这个包的人和 agent：内部设计、诊断机制、文件职责在[文末](#八给开发者和-agent-的内部说明)，其中"为什么是这个形状"一节解释了两个被引擎接口逼出来的设计决定。
 
 ---
@@ -181,6 +203,32 @@ DSL 里的 `model.provider` / `model.name` 是**请求**，不是命令。实际
 - 契约只覆盖"一次 HTTP 请求 + 取字段"：**没有参数类型转换、没有 schema 校验、JSON body 只有一层映射**；OAuth、多步调用、需要签名的工具表达不了。
 - 契约会把 `tool_configurations` 当凭据拼进请求，所以**契约文件和工作流都必须可信**。
 - 契约格式见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md)。
+
+**从零加一个工具**（复制即可改）：把下面这份存成 `~/.dsh-dify/tools/mysearch.yaml`，
+工作流里 `provider_name: mysearch` + `tool_name: search` 的 tool 节点就能跑了。
+
+> ⚠️ **契约在插件挂载时一次性加载**，新增/修改 YAML 后要**重启 DSH**（或重新加载插件）才生效。
+> 改完还是找不到，先调 `dify_native_services` 看 `contractRoots` 里列的是不是你放的那个目录。
+
+```yaml
+provider: mysearch
+tool: search
+label: { zh_Hans: 我的搜索 }
+parameters:
+  - { name: q, type: string, form: llm, required: true }     # 来自节点 tool_parameters
+  - { name: api_key, type: secret-input, form: form, required: true }  # 来自 tool_configurations
+request:
+  method: GET
+  url: "https://api.example.com/search?q={{parameters.q}}"
+  headers: { Authorization: "Bearer {{credentials.api_key}}" }
+response:
+  text: "{{response.body}}"          # 整段返回文本
+  variables:
+    - { name: title, value: "{{response.title}}" }   # 映射成节点输出变量
+```
+
+还需要 `DIFY_TOOL_ALLOW` 放行这个工具（默认只放行 `web_search,web_fetch`），
+例如 `DIFY_TOOL_ALLOW=mysearch/search` 或 `*`。
 - ⚠️ 样本里那个 `jina_reader` 契约直连 `r.jina.ai`，**在本机实测请求失败**（`fetch failed`，curl 探测 20 秒超时），测试是用本地 fixture 端点验证的。也就是说：**这条链路你这边现在跑不通，需要你自己处理网络或换端点。**
 
 #### 3.6 `knowledge-retrieval`：不是向量检索

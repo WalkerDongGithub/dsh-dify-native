@@ -13,7 +13,7 @@ Dify 的 `tool` 节点原本指向一个 **Dify 插件**（Python 实现，跑�
 | --- | --- |
 | `lib/tool-contracts.js` | 契约的加载、占位符替换、HTTP 调用、响应映射 |
 | `lib/provider.js`（`executeTool` / `runHarnessTool` / `toolAllowSet`） | `dify-node` provider 里的 `tool` 节点分派根 |
-| `lib/dsl.js`（`toolArgumentsExpr` / `parameterObjectExpr`） | 把 DSL 的 `tool_parameters` / `tool_configurations` 编译进节点请求 |
+| `lib/dsl.js`（`parameterObjectExpr`） | 把 DSL 的 `tool_parameters` / `tool_configurations` 编译进节点请求 |
 | `lib/index.js`（`apply`） | 构造 provider 时的配置默认值 |
 
 ---
