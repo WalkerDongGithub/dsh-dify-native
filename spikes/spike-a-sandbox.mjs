@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import LocalSandboxProvider from '@deepseek-ai/dsh-sandbox-local'
 
-const ROOT = '/home/walker/dify-test'
+const ROOT = new URL('..', import.meta.url).pathname
 const ws = mkdtempSync(join(ROOT, 'runs/sandbox-a-'))
 
 const ctx = new Context()

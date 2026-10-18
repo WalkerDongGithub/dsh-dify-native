@@ -57,7 +57,7 @@ Dify llm 节点
 
 ## 四、关键发现：姊妹方案 `dsh-dify-native` 已经实现了这条路
 
-`/home/walker/dify-test/dsh-dify-native/lib/provider.js`：
+`<repo>/dsh-dify-native/lib/provider.js`：
 
 ```js
 // 路由选择优先级

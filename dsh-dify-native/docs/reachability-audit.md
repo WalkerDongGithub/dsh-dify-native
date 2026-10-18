@@ -200,7 +200,7 @@ PY
 8891 0
 docker None
 podman None
-go /home/walker/go/bin/go
+go /path/to/go/bin/go
 redis-server None
 postgres None
 pandoc None

@@ -16,9 +16,9 @@ import WorkerThreadWorkflowEngine from '@deepseek-ai/dsh-workflow-worker-thread'
 import { compileGraph, parseDifyDsl } from '../dsh-dify-native/lib/dsl.js'
 import { createDifyNodeProvider } from '../dsh-dify-native/lib/provider.js'
 
-const ROOT = '/home/walker/dify-test'
+const ROOT = new URL('..', import.meta.url).pathname
 const LAUNCHER =
-  '/home/walker/node/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run'
+  '<dsh>/node_modules/@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run'
 
 const ctx = new Context()
 await ctx.plugin(LocalSandboxProvider)

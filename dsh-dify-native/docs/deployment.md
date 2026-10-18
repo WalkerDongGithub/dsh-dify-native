@@ -5,7 +5,7 @@ JavaScript 依赖 `nunjucks`、`yaml`、`ajv` 都在 package.json 直接声明�
 ## 1. clone 后先装 JS 依赖
 
 ```bash
-git clone http://127.0.0.1:8443/walker/dsh-dify-native.git
+git clone https://github.com/<owner>/dsh-dify-native.git
 cd dsh-dify-native/dsh-dify-native
 npm ci                 # 必须：缺 yaml/ajv/nunjucks 时插件连加载都失败
 ```

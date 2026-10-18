@@ -4,9 +4,11 @@
  */
 import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
 import { compileGraph, inspectGraph, parseDifyDsl } from '../lib/dsl.js'
 
-const ROOT = '/home/walker/dify-test/dsl'
+// Samples ship in this repo at `dsl/`.
+const ROOT = fileURLToPath(new URL('../dsl/', import.meta.url))
 const read = (name) => readFileSync(`${ROOT}/${name}`, 'utf8')
 
 // 1. json-repair: linear start → code → end compiles.

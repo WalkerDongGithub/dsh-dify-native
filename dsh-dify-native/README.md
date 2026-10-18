@@ -2,6 +2,13 @@
 
 直接跑 Dify 导出的工作流 `.yml`，执行引擎用 dsh 自带的引擎、沙箱和模型服务，不用另外部署 Dify。
 
+> **目的与意图**：想用更小的代价跑 workflow。部署完整 Dify 太笨重；用 agent 自然语言驱动没有确定性；
+> 自己写编排脚本又没有生态。这个项目借 Dify 的 `.yml` 格式和画布确定性，用 dsh 的模型、沙箱、
+> 工具把它执行掉——**dsh 出能力，Dify 出格式**。
+>
+> **它不保证能跑你的工作流。** 它是一个需求加一个方案：能力边界逐条写在下面，先用 `inspect`
+> 判断，再决定要不要 `run`。后续会继续更新。
+
 这篇 README 是给**用它的人**看的，回答三个问题：
 
 1. [装好怎么用](#一安装三分钟) —— 三步，不需要改 dsh 源码。
@@ -19,8 +26,8 @@
 
 **本仓库会频繁更新。用之前先 `git pull`。**
 
-发现 bug、和 README 描述不符、或者某个节点行为不对：**直接在本仓库的 Gitea 提 issue**
-<http://127.0.0.1:8443/walker/dsh-dify-native/issues>。
+发现 bug、和 README 描述不符、或者某个节点行为不对：**直接在仓库提 issue**。
+主仓在 Gitea，GitHub 上是只读镜像；两边都能看，issue 在镜像侧提也可以。
 
 提 issue 时带上这几样，能让问题一次定位：
 
@@ -45,10 +52,10 @@ README 说不行而实际能跑，或者 README 说能跑而实际失败，都�
 
 ### 1. 挂进 profile
 
-先 clone（路径随意，下文用 `$PLUGIN` 指代你自己 clone 的那一层）：
+先 clone（路径随意，下文用 `$PLUGIN` 指代你自己 clone 的那一层；公开镜像即可）：
 
 ```sh
-git clone http://127.0.0.1:8443/walker/dsh-dify-native.git
+git clone https://github.com/<owner>/dsh-dify-native.git
 cd dsh-dify-native && git pull         # 仓库更新频繁，每次用之前先拉
 export PLUGIN="$PWD/dsh-dify-native"  # 插件在仓库的 dsh-dify-native/ 子目录
 cd "$PLUGIN" && npm ci                 # 三个 JS 依赖（yaml/ajv/nunjucks），漏了插件加载就失败
@@ -370,7 +377,7 @@ cd "$PLUGIN"
 
 它需要：已装 dsh（本机 0.2.0-rc.2）、可用的本地 sandbox 后端、Node、Python3、ripgrep，以及提取/cron 的显式依赖（就是上面两个 `install-*.sh`）。`package-deployment` 那项还需要 npm registry 网络。**任何缺失或失败都会让整个脚本退出失败——不 skip、不吞错。**
 
-> 需要说明边界：这套测试证明的是"实现符合意图、真引擎确实跑出这些 outputs"，**不**证明"和 Dify 官方执行器逐字段一致"。后者只对文档提取做了逐字差分（8 种格式）。逐节点能力证据以 [docs/capability-report.md](docs/capability-report.md) 为准，剩余缺口逐条列在 [docs/semantic-gaps.md](docs/semantic-gaps.md)（非 RAG 共 23 项，其中 17 项可本地继续做、6 项必须要有真实插件/账户/部署资料）。
+> 需要说明边界：这套测试证明的是"实现符合意图、真引擎确实跑出这些 outputs"，**不**证明"和 Dify 官方执行器逐字段一致"，也不构成"你的工作流能跑"的承诺。后者只对文档提取做了逐字差分（8 种格式）。逐节点能力证据以 [docs/capability-report.md](docs/capability-report.md) 为准，剩余缺口逐条列在 [docs/semantic-gaps.md](docs/semantic-gaps.md)（非 RAG 共 23 项，其中 17 项可本地继续做、6 项必须要有真实插件/账户/部署资料）。
 
 ---
 

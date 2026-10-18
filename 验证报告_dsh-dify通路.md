@@ -1,6 +1,6 @@
 # 验证报告：dsh-dify-runtime 通路
 
-日期：2026-10-17　机器：walker server（2C / 3.5G / 剩余 6.9G）
+日期：2026-10-17　机器：开发机（2C / 3.5G / 剩余 6.9G）
 结论：**通路成立**——4 个未改动的真实 Dify 工作流已在本 harness 完整执行并产出正确结果；
 不支持的节点会在执行前显式拒绝。最小转译闭环已落地为可安装的 dsh 插件。
 
@@ -35,7 +35,7 @@ DSL/LanguageConsistencyChecker.yml start → tool×3 → code×4 → llm×3 → 
 
 ## 三、转译与执行
 
-实现路径（`/home/walker/dify-test/dsh-dify-runtime/`）：
+实现路径（`<repo>/dsh-dify-runtime/`）：
 
 ```
 YAML → dsl.py 解析 → IR（节点/边/sourceHandle/顺序/不支持清单）
@@ -83,7 +83,7 @@ YAML → dsl.py 解析 → IR（节点/边/sourceHandle/顺序/不支持清单�
   subagent（强制 LLM 循环），与"零 LLM 执行单元 + 确定性"冲突；首版按定型方案 5.1/六
   实现独立确定性调度器。把 IR 编译到 workflowEngine 需要引擎先支持无 LLM 任务。
 - **LLM 没走 `ctx.llm`**：目前是插件子进程里的 OpenAI 兼容适配器，直接读 `ZAI_API_KEY`。
-- **code 没走 `ctx.sandbox`/landlock**：是独立子进程 + rlimit + 超时，仍能以 walker 用户
+- **code 没走 `ctx.sandbox`/landlock**：是独立子进程 + rlimit + 超时，仍能以当前用户
   访问网络。生产前必须补。
 - **未实现节点**：tool/MCP、knowledge-retrieval、iteration/loop、agent、
   parameter/document-extractor、datasource、trigger、list-operator。这些一律预检拒绝。

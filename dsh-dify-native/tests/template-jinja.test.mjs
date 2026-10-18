@@ -15,9 +15,10 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { compileGraph, inspectGraph, parseDifyDsl } from '../lib/dsl.js'
+import { fileURLToPath } from 'node:url'
 import { compileJinja, hasJinja, renderJinja } from '../lib/jinja.js'
 
-const DSL = '/home/walker/dify-test/dsl'
+const DSL = fileURLToPath(new URL('../dsl/', import.meta.url))
 
 /** A minimal graph around one template-transform node. */
 function graphWithTemplate(template, variables = []) {
