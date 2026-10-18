@@ -756,16 +756,13 @@ function difyValueExpr(raw, scope) {
   return JSON.stringify(raw ?? '')
 }
 
-/** Build a concrete JS object expression for a Dify tool node's parameters. */
-function toolArgumentsExpr(parameters, scope) {
-  const entries = []
-  for (const [key, raw] of Object.entries(parameters ?? {})) {
-    entries.push(`${JSON.stringify(key)}: ${difyValueExpr(raw, scope)}`)
-  }
-  return `{${entries.join(', ')}}`
-}
 
 /** Build a concrete JS object expression for datasource / plugin parameters. */
+/**
+ * Render a Dify parameter/configurations map as an object literal. Used for tool
+ * arguments, tool configurations and datasource parameters/configurations — the
+ * shape is identical in all four places, so one renderer serves all of them.
+ */
 function parameterObjectExpr(parameters, scope) {
   const entries = []
   for (const [key, raw] of Object.entries(parameters ?? {})) {
@@ -1577,7 +1574,7 @@ export function compileGraph(parsed, options = {}) {
       }
     }
     if (kind === 'tool') {
-      lines.push(`${pad}  ${reqVar}.arguments = ${toolArgumentsExpr(data.tool_parameters, scope)}`)
+      lines.push(`${pad}  ${reqVar}.arguments = ${parameterObjectExpr(data.tool_parameters, scope)}`)
       // `tool_configurations` is the user-configured half of a tool call (API
       // keys, per-provider settings). Dify keeps it separate from the per-call
       // `tool_parameters`; both are forwarded now.

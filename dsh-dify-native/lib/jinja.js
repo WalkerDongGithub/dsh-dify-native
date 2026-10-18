@@ -229,5 +229,3 @@ export function hasJinja(template) {
   const remainder = String(template ?? '').replace(/\{\{#([^#{}]+)#\}\}/g, '')
   return /\{%[\s\S]*?%\}|\{#[\s\S]*?#\}|\{\{(?!\s*#)[\s\S]*?\}\}/.test(remainder)
 }
-
-export { DENY as DENIED_PROPERTIES }

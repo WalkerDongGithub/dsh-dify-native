@@ -33,6 +33,7 @@ cd /home/walker/dify-test/dsh-dify-native
 
 ./scripts/install-extraction.sh   # 只在用 document-extractor 时：PDF / DOCX / XLSX
 ./scripts/install-events.sh       # 只在用 cron 定时、webhook 入站时
+# 两者都是 scripts/install-vendor.sh <extraction|events> 的薄包装
 ```
 
 两个脚本都装到插件**自己新建**的目录（`.vendor-extraction` / `.vendor-events`），不碰你现有 Python 环境；目录已存在会拒绝覆盖，所以重复跑是安全的。
@@ -280,6 +281,7 @@ note                   编译器自己的结构性提示
 | `DIFY_TOOLS_ROOT` | —（无契约） | 声明式工具契约根目录，**冒号分隔**多个，递归扫 `*.yaml` / `*.yml` |
 | `DIFY_TOOL_PASSTHROUGH` | —（不放开） | 允许 tool 节点按**确切名字**调用的宿主工具，逗号分隔 |
 | `DIFY_KNOWLEDGE_ROOT` | `<workspace>/knowledge` | knowledge-retrieval 的数据集根目录 |
+| `DIFY_DATASOURCES_ROOT` | —（无契约） | datasource 契约目录，**冒号分隔**；格式同工具契约，见 [datasource 协议](docs/datasource-contract.md) |
 | `DIFY_DOCUMENT_ROOT` | `<workspace>` | document-extractor 的文件根目录 |
 | `DIFY_RUNTIME_PYTHON` | `python3` | 执行 code 节点的解释器 |
 | `DIFY_PYTHONPATH` | 自动探测 | Python 的 `PYTHONPATH` |

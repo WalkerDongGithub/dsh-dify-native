@@ -17,18 +17,6 @@
  * without a cycle.
  */
 
-/** Support level for one execution unit. `full` is the default and is omitted. */
-export const MODE = {
-  /** Implements the node's Dify semantics for the supported surface. */
-  full: 'full',
-  /** Runs, but only a subset of the node's Dify semantics. */
-  simplified: 'simplified',
-  /** Recognized and scheduled, but does not perform the node's work. */
-  placeholder: 'placeholder',
-  /** Unknown node type: parsed, executed as a no-op that passes the edge through. */
-  passthrough: 'passthrough',
-}
-
 /**
  * Subject namespace for the Dify-semantics deviation rows (`semantics-differ`,
  * `semantics-degraded`, `node-unsupported`).
