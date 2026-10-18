@@ -170,7 +170,7 @@ DSL 里的 `model.provider` / `model.name` 是**请求**，不是命令。实际
 
 按顺序：
 
-1. **声明式 YAML 契约**（`DIFY_TOOLS_ROOT` 下，一次 HTTP 请求 + 响应字段映射）；
+1. **声明式 YAML 契约**（放进 `~/.dsh-dify/tools` 即可，无需配置；也可用 `DIFY_TOOLS_ROOT` 指定，一次 HTTP 请求 + 响应字段映射）；
 2. **显式 opt-in 的宿主工具**（`DIFY_TOOL_PASSTHROUGH` 里列出的确切工具名）；
 3. 否则拒绝。
 
@@ -278,10 +278,10 @@ note                   编译器自己的结构性提示
 | --- | --- | --- |
 | `DIFY_LLM_PROVIDER` + `DIFY_LLM_MODEL` | — | 强制 LLM 路由，**两个都要设才生效** |
 | `DIFY_TOOL_ALLOW` | `web_search,web_fetch` | tool 节点白名单，逗号分隔，精确匹配；`*` 全放开 |
-| `DIFY_TOOLS_ROOT` | —（无契约） | 声明式工具契约根目录，**冒号分隔**多个，递归扫 `*.yaml` / `*.yml` |
+| `DIFY_TOOLS_ROOT` | —（无契约） | 声明式工具契约根目录，**冒号分隔**多个，递归扫 `*.yaml` / `*.yml`；约定目录 `~/.dsh-dify/tools` 总是会被扫描，此变量在其**之后**，同名覆盖约定目录 |
 | `DIFY_TOOL_PASSTHROUGH` | —（不放开） | 允许 tool 节点按**确切名字**调用的宿主工具，逗号分隔 |
 | `DIFY_KNOWLEDGE_ROOT` | `<workspace>/knowledge` | knowledge-retrieval 的数据集根目录 |
-| `DIFY_DATASOURCES_ROOT` | —（无契约） | datasource 契约目录，**冒号分隔**；格式同工具契约，见 [datasource 协议](docs/datasource-contract.md) |
+| `DIFY_DATASOURCES_ROOT` | —（无契约） | datasource 契约目录，**冒号分隔**；格式同工具契约，约定目录 `~/.dsh-dify/datasources` 总是会被扫描。见 [datasource 协议](docs/datasource-contract.md) |
 | `DIFY_DOCUMENT_ROOT` | `<workspace>` | document-extractor 的文件根目录 |
 | `DIFY_RUNTIME_PYTHON` | `python3` | 执行 code 节点的解释器 |
 | `DIFY_PYTHONPATH` | 自动探测 | Python 的 `PYTHONPATH` |
@@ -301,7 +301,7 @@ cd /home/walker/dify-test/dsh-dify-native
 ./tests/run-all.sh        # → ALL TESTS OK
 ```
 
-**这不是纯离线单元测试。** 33 个测试入口里主体是**打到你机器上已装 dsh 的真实引擎测试**：真实 `workflowEngine.start`、真 sandbox 子进程、真 HTTP 回环服务、真 Python 提取。LLM 用固定回复，不花模型钱。
+**这不是纯离线单元测试。** 34 个测试入口里主体是**打到你机器上已装 dsh 的真实引擎测试**：真实 `workflowEngine.start`、真 sandbox 子进程、真 HTTP 回环服务、真 Python 提取。LLM 用固定回复，不花模型钱。
 
 它需要：已装 dsh（本机 0.2.0-rc.2）、可用的本地 sandbox 后端、Node、Python3、ripgrep，以及提取/cron 的显式依赖（就是上面两个 `install-*.sh`）。`package-deployment` 那项还需要 npm registry 网络。**任何缺失或失败都会让整个脚本退出失败——不 skip、不吞错。**
 
@@ -403,7 +403,7 @@ conversation 变量按 `session.id + 工作流绝对路径` 保存在 `.dify-nat
 
 `dsl.js` 和 `provider.js` 都是纯翻译层 / 能力层——它们不调度、不隔离、不连模型。
 
-### 8.9 测试清单（`run-all.sh` 共 33 个入口）
+### 8.9 测试清单（`run-all.sh` 共 34 个入口）
 
 | 文件 | 覆盖 |
 | --- | --- |

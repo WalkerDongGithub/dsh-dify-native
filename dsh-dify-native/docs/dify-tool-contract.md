@@ -74,21 +74,30 @@ DSL 的 `tool_parameters` 成为宿主工具的 `arguments`；`tool_configuratio
 
 ## 2. 契约放在哪里
 
-一份契约 = 一个 YAML 文件（`.yaml` / `.yml`）。运行时从 **根目录列表** 里递归扫描：
+一份契约 = 一个 YAML 文件（`.yaml` / `.yml`）。运行时从 **根目录列表** 里递归扫描，按顺序：
 
-- 环境变量 `DIFY_TOOLS_ROOT`，**冒号分隔**多个目录（类 Unix `PATH` 写法）：
+1. **约定目录** `~/.dsh-dify/tools` —— 不需要任何配置。YAML 丢进去就能被找到。
+2. **环境变量** `DIFY_TOOLS_ROOT`，**冒号分隔**多个目录（类 Unix `PATH` 写法）：
 
-  ```sh
-  DIFY_TOOLS_ROOT='/opt/dify-tools:/srv/workflows/tools'
-  ```
+   ```sh
+   DIFY_TOOLS_ROOT='/opt/dify-tools:/srv/workflows/tools'
+   ```
 
-- 或代码里构造 provider 时传 `createDifyNodeProvider(ctx, { toolRoots: [dir1, dir2] })`
-  （`toolRoots` 优先于环境变量）；也可以直接传一个现成的 `toolRegistry`。
+3. 或代码里构造 provider 时传 `createDifyNodeProvider(ctx, { toolRoots: [dir1, dir2] })`
+   （`toolRoots` 整体**替换**默认列表）；也可以直接传一个现成的 `toolRegistry`。
+
+**同名冲突时后者覆盖前者**（注册表是 `Map`，后扫描的写入）。所以显式设了
+`DIFY_TOOLS_ROOT` 的部署会覆盖约定目录里的同名契约 —— 显式配置意味着"我知道我在干什么"。
+
+datasource 契约同理，约定目录是 `~/.dsh-dify/datasources`，环境变量是
+`DIFY_DATASOURCES_ROOT`。见 [datasource 协议](datasource-contract.md)。
 
 **实际加载时机**：`lib/index.js` 的 `apply(ctx)` 在插件挂载时调用
 `createDifyNodeProvider(childCtx, { name: 'dify-node', python, pythonPath })`，**没有**传
-`toolRoots`，所以插件路径下只会读 `DIFY_TOOLS_ROOT`。加载是**一次性的**（provider 构造时）：
+`toolRoots`，所以走上面 1 + 2。加载是**一次性的**（provider 构造时）：
 改契约文件或改环境变量都需要重新加载插件 / 重启进程才生效。
+
+不知道在扫哪些目录时，调 `dify_native_services`，它的 `contractRoots` 会列出约定目录和当前生效的环境变量。
 
 扫描规则（`createToolRegistry`）：
 

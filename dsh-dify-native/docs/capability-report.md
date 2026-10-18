@@ -2,7 +2,7 @@
 
 **限定协议下可以用，整体语义收尾尚未全部完成。非 RAG 仍有 23 个离散 S 子项：17 项可继续本地开发/依赖配置，6 项须有指定真实插件、账户或 Dify 部署资料验收。** 原审计 7 个非暂停组（9 个节点名）仍含 21 项，另有 conversation、HTTP 阶段 timeout 各 1 项；[逐项清单与验收条件](semantic-gaps.md) 是计数依据。RAG 的 #2 knowledge-retrieval / #3 knowledge-index 两组、两个节点名按用户要求暂停，未混入 23 项。
 
-全量验证：`./tests/run-all.sh` 的 33 个入口全部通过（`ALL TESTS OK`）。18 个真实样本经 `workflowEngine.start` 全链路执行并断言最终 outputs。
+全量验证：`./tests/run-all.sh` 的 34 个入口全部通过（`ALL TESTS OK`）。18 个真实样本经 `workflowEngine.start` 全链路执行并断言最终 outputs。
 
 每个节点都在 `dify_native_inspect` 上报出与 Dify 的偏离项（`deviations`），按危险度分档：**跑成功但做了别的事**（`semantics-differ`）、**降级实现**（`semantics-degraded`）、**完全不支持**（`node-unsupported`）。支持级别由这些缺口与字段丢弃共同推导；`full` 只表示"未检测到本图特有的降级原因"。
 
@@ -55,6 +55,6 @@
 | package-deployment.test.mjs | 临时 npm pack/独立 npm install；`CLEAN PACKAGE IMPORT OK`；打包文件齐全，PDF/cron helper 用显式依赖路径可用 |
 | engine-e2e.test.mjs / engine-nested.test.mjs | 18/18 样本输出、错误/支持分支、显式与推断的嵌套容器 |
 
-复现 `./tests/run-all.sh`（33 个测试入口）。需已装 dsh/可用 sandbox、Node/Python、既有样本依赖，以及提取/cron 的显式依赖；package-deployment 需要 npm registry 网络。任何缺失/失败均退出失败，不 skip、不吞错。测试采用本地回环服务，无付费模型请求。
+复现 `./tests/run-all.sh`（34 个测试入口）。需已装 dsh/可用 sandbox、Node/Python、既有样本依赖，以及提取/cron 的显式依赖；package-deployment 需要 npm registry 网络。任何缺失/失败均退出失败，不 skip、不吞错。测试采用本地回环服务，无付费模型请求。
 
 未验证范围：公网入站、真实公网 Jina、真实模型自治质量、全部时区/DST 组合、断电恢复。本地去重采用先 claimed 后执行、中断不自动重放，不承诺分布式 exactly-once。语义缺口见 [23 项 S 清单](semantic-gaps.md)。

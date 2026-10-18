@@ -22,6 +22,7 @@
  */
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import Ajv from 'ajv'
 import { basename, extname, isAbsolute, join, resolve, dirname } from 'node:path'
@@ -217,10 +218,17 @@ export function createDifyNodeProvider(ctx, options = {}) {
   const knowledgeRoot = options.knowledgeRoot ?? process.env.DIFY_KNOWLEDGE_ROOT ?? ''
   const documentRoot = options.documentRoot ?? process.env.DIFY_DOCUMENT_ROOT ?? ''
   const toolAllow = options.toolAllow ?? process.env.DIFY_TOOL_ALLOW ?? ''
-  // Declarative tool contracts: directories scanned for provider/tool YAML.
-  const toolRoots = options.toolRoots ?? (process.env.DIFY_TOOLS_ROOT ?? '').split(':').filter((item) => item.length > 0)
+  // Declarative contracts, scanned in order so a later root overrides an
+  // earlier one on a provider/tool collision (the registry is a Map):
+  //   1. ~/.dsh-dify/{tools,datasources} — the conventional home, so a YAML
+  //      dropped there works with no configuration at all;
+  //   2. the explicit environment variables — a deployment that names a root
+  //      means it, so it wins over the convention.
+  const conventional = defaultContractRoots()
+  const toolRoots = options.toolRoots ?? [conventional.tools, ...rootList(process.env.DIFY_TOOLS_ROOT)]
   const toolRegistry = options.toolRegistry ?? createToolRegistry(toolRoots)
-  const datasourceRegistry = createToolRegistry((process.env.DIFY_DATASOURCES_ROOT ?? '').split(':').filter(Boolean))
+  const datasourceRoots = options.datasourceRoots ?? [conventional.datasources, ...rootList(process.env.DIFY_DATASOURCES_ROOT)]
+  const datasourceRegistry = options.datasourceRegistry ?? createToolRegistry(datasourceRoots)
   // Exact harness-tool names a workflow may call directly (opt-in passthrough).
   const toolPassthrough = options.toolPassthrough ?? process.env.DIFY_TOOL_PASSTHROUGH ?? ''
 
@@ -1797,6 +1805,28 @@ function executeHumanInput(spec) {
     outputs,
     meta: { autoResolved: spec.humanSubmission !== true, actions: ids, source: spec.humanSubmission === true ? 'pending-submission' : 'explicit-action-injection', note: 'explicit action only; no default automatic choice' },
   }
+}
+
+/**
+ * The conventional home for declarative YAML the plugin should always pick up:
+ * `~/.dsh-dify/{tools,datasources}`.
+ *
+ * It sits alongside the explicit environment variables rather than replacing
+ * them: `DIFY_TOOLS_ROOT` / `DIFY_DATASOURCES_ROOT` stay authoritative when set,
+ * and this directory is scanned *in addition*, so a workflow never breaks
+ * because a deployment forgot to export a variable. Absent directories are
+ * simply skipped by the registry scan.
+ *
+ * @returns `{ tools, datasources }` absolute directories (not guaranteed to exist).
+ */
+export function defaultContractRoots(home = homedir()) {
+  const base = join(home, '.dsh-dify')
+  return { tools: join(base, 'tools'), datasources: join(base, 'datasources') }
+}
+
+/** Split a colon-separated root list into non-empty directory paths. */
+function rootList(value) {
+  return String(value ?? '').split(':').filter((item) => item.length > 0)
 }
 
 /** Locate the vendored Python libraries shipped with the plugin. */

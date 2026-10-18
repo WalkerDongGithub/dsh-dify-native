@@ -9,7 +9,7 @@
 - `website_crawl`：输出 `{...info, datasource_type}`；接收已有爬取结果，不谎称进行了爬取。
 - `online_document` / `online_drive`：须部署声明式 HTTP 适配契约；未声明直接失败，不用任何插件参数猜文件。
 
-`DIFY_DATASOURCES_ROOT` 为独立契约目录（冒号分隔）。格式复用 [工具契约](dify-tool-contract.md)，`provider` 对应 provider_name，`tool` 对应 datasource_name。参数来自 datasource_parameters，配置来自 datasource_configurations；额外可声明参数 datasource_info 接收系统信息。response.variables 显式映射远端变量；没有映射的工具 text/result/json 别名不出现在 datasource 输出。online_drive 必须显式映射 file，输出另补 datasource_type。
+契约放在 `~/.dsh-dify/datasources`（约定目录，无需配置）或 `DIFY_DATASOURCES_ROOT`（冒号分隔，会**覆盖**约定目录里的同名契约）。格式复用 [工具契约](dify-tool-contract.md)，`provider` 对应 provider_name，`tool` 对应 datasource_name。参数来自 datasource_parameters，配置来自 datasource_configurations；额外可声明参数 datasource_info 接收系统信息。response.variables 显式映射远端变量；没有映射的工具 text/result/json 别名不出现在 datasource 输出。online_drive 必须显式映射 file，输出另补 datasource_type。
 
 ```yaml
 provider: cloud

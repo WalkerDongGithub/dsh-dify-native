@@ -222,4 +222,54 @@ response:
   console.log('ok 10 — a bare {{response}} resolves to the whole body')
 }
 
+
+// ------------------------------------------- conventional ~/.dsh-dify directory
+
+{
+  // The plugin must find YAML in ~/.dsh-dify/{tools,datasources} with no
+  // configuration: that is the whole point of the convention. Exercised through
+  // the real provider factory so the wiring is covered, not just the registry.
+  const home = mkdtempSync(join(tmpdir(), 'dify-home-'))
+  const { defaultContractRoots } = await import('../lib/provider.js')
+  const roots = defaultContractRoots(home)
+  assert.equal(roots.tools, join(home, '.dsh-dify', 'tools'), 'tools root is the conventional path')
+  assert.equal(roots.datasources, join(home, '.dsh-dify', 'datasources'), 'datasources root is the conventional path')
+
+  // Nothing exists yet: the roots must be harmless, not an error.
+  assert.deepEqual(createToolRegistry([roots.tools]).list(), [], 'a missing conventional directory is skipped')
+
+  mkdirSync(roots.tools, { recursive: true })
+  writeFileSync(
+    join(roots.tools, 'home-tool.yaml'),
+    `
+provider: home
+tool: echo
+parameters:
+  - { name: q, type: string, form: llm, required: true }
+request:
+  method: GET
+  url: "https://example.test/{{parameters.q}}"
+response:
+  text: "{{response.data}}"
+`,
+    'utf8',
+  )
+  assert.deepEqual(createToolRegistry([roots.tools]).list(), ['home/echo'], 'YAML in the conventional directory is registered')
+  console.log('ok 11 — ~/.dsh-dify/tools is scanned by default and absent directories are skipped')
+
+  // Precedence: the registry is a Map, so the LAST root wins. An explicit
+  // DIFY_TOOLS_ROOT must therefore override the convention, which means the
+  // provider lists the conventional root first.
+  const explicit = mkdtempSync(join(tmpdir(), 'dify-explicit-'))
+  writeFileSync(
+    join(explicit, 'home-tool.yaml'),
+    'provider: home\ntool: echo\nlabel: explicit\nparameters: []\nrequest: { method: GET, url: "https://example.test/2" }\nresponse: { text: "{{response.data}}" }\n',
+    'utf8',
+  )
+  // Same order the provider uses: convention first, explicit after.
+  const overridden = createToolRegistry([roots.tools, explicit])
+  assert.equal(overridden.get('home', 'echo').label, 'explicit', 'an explicit root overrides the conventional directory')
+  console.log('ok 12 — an explicit root overrides ~/.dsh-dify on a name collision')
+}
+
 console.log('TOOL CONTRACT TESTS OK')

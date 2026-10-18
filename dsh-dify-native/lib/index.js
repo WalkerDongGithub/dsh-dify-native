@@ -19,7 +19,7 @@ import { dirname, join, resolve } from 'node:path'
 import { stateRoot, stateKey, readState, writeState, lockState } from './runtime-state.js'
 import { fileURLToPath } from 'node:url'
 import { compileGraph, inspectGraph, parseDifyDsl } from './dsl.js'
-import { createDifyNodeProvider, defaultPythonPath } from './provider.js'
+import { createDifyNodeProvider, defaultContractRoots, defaultPythonPath } from './provider.js'
 import { startEventRuntime } from './event-runtime.js'
 import { deriveChatHistory } from './session-history.js'
 
@@ -306,6 +306,14 @@ function createServicesTool(ctx) {
         harnessTools,
         knowledgeRoot: process.env.DIFY_KNOWLEDGE_ROOT ?? '',
         toolAllow: process.env.DIFY_TOOL_ALLOW ?? 'web_search,web_fetch',
+        // Where declarative YAML is read from, so "why is my tool not found?"
+        // has an answer without reading source. The conventional directory is
+        // always scanned; the env var is added on top and wins on collision.
+        contractRoots: {
+          conventional: defaultContractRoots(),
+          tools: process.env.DIFY_TOOLS_ROOT ? process.env.DIFY_TOOLS_ROOT.split(':').filter(Boolean) : [],
+          datasources: process.env.DIFY_DATASOURCES_ROOT ? process.env.DIFY_DATASOURCES_ROOT.split(':').filter(Boolean) : [],
+        },
         defaultModel: defaultModel ?? null,
         node: process.version,
       }
