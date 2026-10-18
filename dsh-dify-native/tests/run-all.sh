@@ -38,7 +38,10 @@ for test in \
   tests/package-deployment.test.mjs \
   tests/engine-http-timeout.test.mjs \
   tests/research-samples.test.mjs \
-  tests/tool-output-json.test.mjs
+  tests/tool-output-json.test.mjs \
+  tests/human-inspect.test.mjs \
+  tests/start-defaults.test.mjs \
+  tests/template-mixed.test.mjs
 do
   echo "== $test"
   node "$test"

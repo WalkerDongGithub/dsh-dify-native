@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { compileGraph, parseDifyDsl } from '../lib/dsl.js'
+import { readFileSync } from 'node:fs'
 import { realHarness } from './helpers/real-harness.mjs'
 const root = mkdtempSync(join(tmpdir(), 'dify-defaults-'))
 const fields = [
@@ -17,6 +19,11 @@ writeFileSync(path, JSON.stringify({app:{name:'defaults', mode:'workflow'}, work
  {id:'s',data:{type:'start',variables:fields}},
  {id:'e',data:{type:'end',outputs:fields.map(f=>({variable:f.variable,value_selector:['s',f.variable]}))}},
 ],edges:[{source:'s',target:'e'}]}}}))
+// Direct script execution also applies defaults, independently of run-tool normalization.
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor
+const compiled = compileGraph(parseDifyDsl(readFileSync(path,'utf8')))
+const direct = await new AsyncFunction('args','phase',compiled.script)({},()=>{})
+assert.deepEqual(direct.outputs,Object.fromEntries(fields.map(f=>[f.variable,f.default])))
 let h
 try {
  h = await realHarness(root)

@@ -412,13 +412,6 @@ export function buildIR(parsed) {
     reportTemplateGaps(diagnostics, node)
   }
 
-  // Known deviations from Dify semantics, one diagnostic per (node, gap). These
-  // are not "the workflow is broken" — they are "this node does something other
-  // than Dify would". `field-dropped` catches DSL values that were ignored; this
-  // pass also covers gaps that fire even when the DSL said nothing (routing,
-  // placeholder work, refused plugin shapes), which the field sweep cannot see.
-
-
   // Container children: ReactFlow `parentId`, Dify's `data.iteration_id` /
   // `data.loop_id`, or (as a last resort) `isInIteration`/`isInLoop` + the
   // container's own edge into its start node.
@@ -538,8 +531,14 @@ export function buildIR(parsed) {
   const entryKind = entry?.kind
 
   const start = starts[0]
+  // Known deviations from Dify semantics, one diagnostic per (node, gap). These
+  // are not "the workflow is broken" — they are "this node does something other
+  // than Dify would". `field-dropped` catches DSL values that were ignored; this
+  // pass also covers gaps that fire even when the DSL said nothing (routing,
+  // placeholder work, refused plugin shapes), which the field sweep cannot see.
+  // Container membership is known here, so inspect can reject nested forms.
   for (const row of nodeDeviations({ nodes, topNodes })) {
-    if (row.severity === 'rejected' && !row.bites) continue
+    if (row.nodeKind === 'human-input' && row.severity === 'rejected' && !row.bites) continue
     if (row.severity === 'rejected') diagnostics.rejected(row.nodeId, row.where ?? row.nodeKind, row.consequence, row.fix)
     else if (row.severity === 'degraded') diagnostics.degraded(row.nodeId, row.nodeKind, row.where, row.consequence, row.fix)
     else diagnostics.differs(row.nodeId, row.nodeKind, row.where, row.consequence, row.fix)
@@ -955,6 +954,7 @@ export function inspectIR(ir) {
 
 /**
  * Support level of every node that does work, for `dify_native_inspect`.
+ * `rejected` means this configuration cannot execute.
  * `full` means the node implements the Dify surface this runtime targets;
  * `simplified` means a documented subset; `placeholder` means it is scheduled
  * but does not perform the node's work; `passthrough` means unknown type.

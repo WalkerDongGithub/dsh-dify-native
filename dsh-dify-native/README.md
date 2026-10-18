@@ -124,6 +124,8 @@ cd "$PLUGIN"
 | `question-classifier` / `parameter-extractor` | 真实 provider 解析，固定 JSON 下逐字断言 |
 | `template-transform` 的 Jinja 循环 / 过滤器 | `for` / `if` / `set` / 嵌套 / `upper` `round` `join` `default` `sort` `map` `sum(attribute=)` `tojson` `unique` 均可用；写错会报错，不会把模板原文当结果返回 |
 
+`start` 的 `text-input` / `text_input` / `paragraph` / `number` / `select` 字段支持声明 `default`：输入缺省或为 `null` 时使用默认值，显式空串和 `0` 会保留；默认值在必填校验前应用。模板先替换 `{{#node.var#}}`，再由 Jinja 渲染局部变量；循环变量按 Jinja 作用域解析，局部变量的值不会被再次当作模板执行。
+
 ### 2.2 文档提取：可以放心用（需先装 extraction 依赖）
 
 PDF、DOCX、XLSX、CSV、JSON、YAML、VTT（.vtt 保留原文）、txt 类文本。
@@ -275,8 +277,8 @@ response:
 | **原生 datasource / online_drive 插件** | 不支持 | 用声明式远端契约，或本地文件 |
 | **原生插件事件订阅**（`trigger-plugin` 订阅） | 不执行原生订阅；只有显式 `bridge: true` 的 HMAC 签名 HTTP 桥能顶一部分 | 用 webhook + 签名桥 |
 | **原生 Dify 调度服务互通** | 不接 `ScheduleService`，只有本地声明的 cron | 用本地 cron |
-| **容器内（iteration/loop 里）的 `human-input`** | 编译前拒绝 | 把人工等待挪到顶层 |
-| **高级表单字段（select / file）** | 编译前拒绝；只支持 text / paragraph | 降低表单类型 |
+| **容器内（iteration/loop 里）的 `human-input`** | inspect 报 `node-unsupported`、support 为 `rejected`，编译前拒绝 | 把人工等待挪到顶层 |
+| **高级表单字段（select / file）** | inspect 报 `node-unsupported`、support 为 `rejected`，编译前拒绝；只支持 text / paragraph | 降低表单类型 |
 | **`human-input` 到期自动恢复** | 不会自动跑，需要你显式调 `dify_native_resume` 或轮询 | 自己写轮询 |
 | **multipart / 二进制 / 文件上传 webhook** | 显式拒绝这些 content_type | 先上传拿文件描述再传 |
 | **webhook 异步返回 / 自定义 response_body / 长超时** | 只实现了状态码配置；同步返回运行记录 | 别依赖异步模式 |
