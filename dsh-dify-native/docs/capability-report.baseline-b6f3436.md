@@ -76,7 +76,7 @@ form-demo 的聊天分支使用解析后 DSL 中预置的 conversation 默认值
 
 ## 复现
 
-前提：安装含上述服务的 dsh（本次版本 0.2.0-rc.2），可用的本地 sandbox 后端、Node、Python3、ripgrep，以及 Python 可导入 json_repair、requests、jieba。本机 Python 库位于 `../dsh-dify-runtime/runtime/vendor`。缺少引擎、依赖或样本会直接报错，不会跳过。测试不自动安装依赖。
+前提：安装含上述服务的 dsh（本次版本 0.2.0-rc.2），可用的本地 sandbox 后端、Node、Python3、ripgrep，以及 Python 可导入 json_repair、requests、jieba。本机 Python 库位于插件自己的 `.vendor-code`（`./scripts/install-vendor.sh code`）。缺少引擎、依赖或样本会直接报错，不会跳过。测试不自动安装依赖。
 
 ```bash
 cd dsh-dify-native

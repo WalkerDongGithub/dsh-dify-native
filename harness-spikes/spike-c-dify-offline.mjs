@@ -26,7 +26,7 @@ ctx.sandbox.internals.landlockLauncher = LAUNCHER
 await ctx.plugin(SubagentRuntime)
 const provider = createDifyNodeProvider(ctx, {
   name: 'dify-node',
-  pythonPath: `${ROOT}/dsh-dify-runtime/runtime/vendor`,
+  pythonPath: `${ROOT}/dsh-dify-native/.vendor-code`,
 })
 ctx.subagents.registerProvider(provider)
 await ctx.plugin(WorkerThreadWorkflowEngine, { provider: 'dify-node' })

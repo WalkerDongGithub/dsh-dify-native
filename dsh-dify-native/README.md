@@ -20,7 +20,7 @@
 **本仓库会频繁更新。用之前先 `git pull`。**
 
 发现 bug、和 README 描述不符、或者某个节点行为不对：**直接在本仓库的 Gitea 提 issue**
-<http://127.0.0.1:8443/walker/dsh-dify-runtime/issues>。
+<http://127.0.0.1:8443/walker/dsh-dify-native/issues>。
 
 提 issue 时带上这几样，能让问题一次定位：
 
@@ -48,8 +48,8 @@ README 说不行而实际能跑，或者 README 说能跑而实际失败，都�
 先 clone（路径随意，下文用 `$PLUGIN` 指代你自己 clone 的那一层）：
 
 ```sh
-git clone http://127.0.0.1:8443/walker/dsh-dify-runtime.git
-cd dsh-dify-runtime && git pull        # 仓库更新频繁，每次用之前先拉
+git clone http://127.0.0.1:8443/walker/dsh-dify-native.git
+cd dsh-dify-native && git pull         # 仓库更新频繁，每次用之前先拉
 export PLUGIN="$PWD/dsh-dify-native"  # 插件在仓库的 dsh-dify-native/ 子目录
 cd "$PLUGIN" && npm ci                 # 三个 JS 依赖（yaml/ajv/nunjucks），漏了插件加载就失败
 ```
