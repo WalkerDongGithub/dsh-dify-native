@@ -546,6 +546,9 @@ export function buildIR(parsed) {
   }
 
   const startVariables = (start?.data?.variables ?? []).filter((v) => v?.variable)
+  const startDefaults = Object.fromEntries(startVariables
+    .filter(v => ['text-input', 'text_input', 'paragraph', 'number', 'select'].includes(v.type) && v.default != null)
+    .map(v => [v.variable, v.default]))
   const startInputs = startVariables.map((v) => v.variable)
   const requiredInputs = startVariables.filter((v) => v.required !== false).map((v) => v.variable)
 
@@ -562,6 +565,7 @@ export function buildIR(parsed) {
     entryKind,
     startId: start?.id,
     startInputs,
+    startDefaults,
     requiredInputs,
     unknownKinds: [...new Set(nodes.filter((n) => n.kind === 'generic').map((n) => n.rawType))],
     warnings,
@@ -1247,6 +1251,10 @@ export function compileGraph(parsed, options = {}) {
   const indentOf = (level) => '  '.repeat(level)
 
   lines.push(`phase(${JSON.stringify(`dify:${parsed.appName || 'workflow'}`)})`)
+  // Apply defaults even for callers that execute the compiled script directly.
+  for (const [key, value] of Object.entries(ir.startDefaults)) {
+    lines.push(`if (args[${JSON.stringify(key)}] == null) args[${JSON.stringify(key)}] = ${JSON.stringify(value)}`)
+  }
   lines.push(`const __cp = args['__dify_checkpoint'] ?? {}`)
   lines.push('const __nodes = __cp.nodes ?? {}')
   lines.push('const __ran = __cp.ran ?? {}')
@@ -2136,6 +2144,7 @@ export function compileGraph(parsed, options = {}) {
     },
     ir,
     order: unit.order,
+    startDefaults: ir.startDefaults,
     startInputs: inspection.startInputs,
     requiredInputs: inspection.requiredInputs,
     endOutputs: inspection.endOutputs,

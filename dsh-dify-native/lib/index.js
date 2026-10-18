@@ -411,7 +411,8 @@ function createRunTool(ctx) {
         await persistTrace(args.tracePath, rejected)
         return rejected
       }
-      const inputs = args.inputs ?? {}
+      const inputs = { ...args.inputs }
+      for (const [key, value] of Object.entries(compiled.startDefaults)) inputs[key] ??= value
       const missing = compiled.requiredInputs.filter((key) => inputs[key] === undefined)
       if (missing.length > 0) {
         const rejected = { status: 'rejected', error: `missing start inputs: ${missing.join(', ')}`, ...inspection, durationMs: Date.now() - startedAt }
