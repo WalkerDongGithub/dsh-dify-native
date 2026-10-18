@@ -12,7 +12,7 @@ import { realHarness } from './helpers/real-harness.mjs'
 import { compileGraph, parseDifyDsl } from '../lib/dsl.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const DSL = resolve(ROOT, '../dsl')
+const DSL = resolve(ROOT, 'dsl')
 const TMP = mkdtempSync(join(ROOT, '.tmp-engine-'))
 const envKeys = ['DIFY_TOOLS_ROOT', 'DIFY_TOOL_ALLOW', 'DIFY_KNOWLEDGE_ROOT']
 const oldEnv = Object.fromEntries(envKeys.map(k => [k, process.env[k]]))

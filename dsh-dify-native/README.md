@@ -484,7 +484,7 @@ conversation 变量按 `session.id + 工作流绝对路径` 保存在 `.dify-nat
 | `dsl.test.mjs` | 解析、IR、编译、拒绝不合法的图 |
 | `nodes.test.mjs` / `nodes-new.test.mjs` | 节点执行语义 / 后补节点 |
 | `control-semantics.test.mjs` | 控制流语义（分支、守卫、容器） |
-| `coverage.test.mjs` | 30 个 `BlockEnum` 类型解析到已知 kind；`../dsl/*.yml` 样本零未知类型、全部可编译 |
+| `coverage.test.mjs` | 30 个 `BlockEnum` 类型解析到已知 kind；`dsl/*.yml` 样本零未知类型、全部可编译 |
 | `diagnostics.test.mjs` | 诊断只在真缺口时出现，且从不升级成编译错误 |
 | `template-jinja.test.mjs` | 模板替换与 Jinja2 渲染 |
 | `session-memory.test.mjs` / `sys-vars.test.mjs` | 记忆滤网/窗口/role_prefix；系统变量 |
@@ -501,7 +501,7 @@ conversation 变量按 `session.id + 工作流绝对路径` 保存在 `.dify-nat
 | `engine-http-follow.test.mjs` / `engine-http-tls.test.mjs` / `engine-http-timeout.test.mjs` | 后继节点；ssl_verify 四态；timeout 键被消费 |
 | `package-deployment.test.mjs` | 临时 `npm pack` + 独立 `npm install`；`CLEAN PACKAGE IMPORT OK` |
 
-测试覆盖的是**已验证的范围**：`coverage.test.mjs` 扫描的 `../dsl/*.yml` 样本、以及各测试里构造的图。它们不能推出"任意 Dify 工作流都可运行"。`coverage.test.mjs` 对样本只断言两件事：零未知类型、零解析/调度 issue、能编译成脚本——它**不**要求所有节点都是 `full`。
+测试覆盖的是**已验证的范围**：`coverage.test.mjs` 扫描的 `dsl/*.yml` 样本、以及各测试里构造的图。它们不能推出"任意 Dify 工作流都可运行"。`coverage.test.mjs` 对样本只断言两件事：零未知类型、零解析/调度 issue、能编译成脚本——它**不**要求所有节点都是 `full`。
 
 ### 8.10 其他协议文档
 

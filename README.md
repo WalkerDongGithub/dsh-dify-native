@@ -58,8 +58,8 @@ nunjucks 里渲染、**不是沙箱**；`code` 节点的 landlock 在部分环�
 | 路径 | 内容 |
 | --- | --- |
 | `dsh-dify-native/` | 插件本体：Dify DSL → IR → 编排脚本，复用 dsh 原生能力 |
-| `dsl/` | 真实 Dify 工作流样本（json-repair / translation / seo-slug / jieba / form-demo 等） |
-| `dsl/research/` | 科研向工作流样本（ChatPaper / NotebookLM / DeepResearch / GPT-Researcher / matplotlib） |
+| `dsh-dify-native/dsl/` | 真实 Dify 工作流样本（json-repair / translation / seo-slug / jieba / form-demo 等） |
+| `dsh-dify-native/dsl/research/` | 科研向工作流样本（ChatPaper / NotebookLM / DeepResearch / GPT-Researcher / matplotlib） |
 | `tools/` | 声明式工具契约样例（复制到 `~/.dsh-dify/tools` 即可用） |
 | `runs/` | 历史验证产物：逐节点 trace、IR、运行结果 |
 | `spikes/`、`harness-spikes/` | 早期调研脚本（沙箱、workflow engine、离线 DSL） |

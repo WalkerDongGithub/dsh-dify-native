@@ -19,7 +19,7 @@ async function execute(parsed, args = {}, agent = async () => { throw Error('une
 // Real sample: actual provider + Python code execution, deterministic LLM replies.
 // Both branch directions run; no network or model service is needed.
 async function sample() {
-  const parsed = parseDifyDsl(readFileSync(new URL('../../dsl/mature-ticket-triage.yml', import.meta.url), 'utf8'))
+  const parsed = parseDifyDsl(readFileSync(new URL('../dsl/mature-ticket-triage.yml', import.meta.url), 'utf8'))
   const results = {}
   for (const priority of ['high', 'normal']) {
     const replies = [JSON.stringify({ priority, keywords: ['退款', '到账'] }), '立即核查退款并联系客户。']

@@ -15,8 +15,8 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { compileGraph, inspectGraph, parseDifyDsl } from '../lib/dsl.js'
 
-// Tests live in `dsh-dify-native/tests/`; the samples live in the parent repo's `dsl/research/`.
-const RESEARCH = new URL('../../dsl/research/', import.meta.url).pathname
+// Samples ship in this repo at `dsl/research/`.
+const RESEARCH = new URL('../dsl/research/', import.meta.url).pathname
 
 /**
  * Per file: expected profile. `compiles: false` means the export itself is

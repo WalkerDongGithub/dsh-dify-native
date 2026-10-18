@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { buildIR, compileGraph, inspectGraph, parseDifyDsl } from '../lib/dsl.js'
 
 const ROOT = new URL('..', import.meta.url).pathname
-const DSL_DIR = join(ROOT, '..', 'dsl')
+const DSL_DIR = join(ROOT, 'dsl')
 const HEADER = 'app: { name: diagnostics, mode: workflow }\nkind: app\nversion: 0.1.3\nworkflow:\n  graph:\n'
 
 /** Build a minimal start → <middle> → end DSL from a middle-node YAML block. */

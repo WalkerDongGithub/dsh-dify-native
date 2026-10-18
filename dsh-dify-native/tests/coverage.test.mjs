@@ -53,7 +53,7 @@ const BLOCK_ENUM = [
 const EXTRA = ['custom-note', 'iteration-end', 'trigger']
 
 const ROOT = new URL('..', import.meta.url).pathname
-const DSL = join(ROOT, '..', 'dsl')
+const DSL = join(ROOT, 'dsl')
 const idOf = (type) => `n_${type.replace(/[^a-z0-9]+/gi, '_')}`
 const parentOf = {
   'iteration-start': idOf('iteration'),

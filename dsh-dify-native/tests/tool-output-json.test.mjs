@@ -17,10 +17,10 @@
  *   node tests/tool-output-json.test.mjs
  */
 import assert from 'node:assert/strict'
-import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { apply } from '../lib/index.js'
 
-const SAMPLE = resolve(process.cwd(), '../dsl/research/gpt-researcher.yml')
+const SAMPLE = fileURLToPath(new URL('../dsl/research/gpt-researcher.yml', import.meta.url))
 
 /** Collect every non-lossless-JSON path in a value. */
 function nonLossless(root) {
@@ -100,7 +100,7 @@ const tools = mountTools()
 
 // 3. An all-green sample still loses nothing: matplotlib has no structural issue.
 {
-  const value = await tools.get('dify_native_inspect').execute({ path: resolve(process.cwd(), '../dsl/research/matplotlib.yml') })
+  const value = await tools.get('dify_native_inspect').execute({ path: fileURLToPath(new URL('../dsl/research/matplotlib.yml', import.meta.url)) })
   assert.deepEqual(nonLossless(value), [])
   assert.deepEqual(value.issues, [])
   console.log('ok 3 — a clean sample keeps zero issues and stays lossless')

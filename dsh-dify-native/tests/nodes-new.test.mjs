@@ -15,7 +15,7 @@ import { compileGraph, inspectGraph, parseDifyDsl } from '../lib/dsl.js'
 import { createDifyNodeProvider, defaultPythonPath } from '../lib/provider.js'
 
 const ROOT = new URL('..', import.meta.url).pathname
-const DSL = join(ROOT, '..', 'dsl')
+const DSL = join(ROOT, 'dsl')
 const TMP = mkdtempSync(join(ROOT, '.tmp-new-'))
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 

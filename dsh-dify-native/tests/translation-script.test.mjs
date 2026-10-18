@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { compileGraph, parseDifyDsl } from '../lib/dsl.js'
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
-const parsed = parseDifyDsl(readFileSync(fileURLToPath(new URL('../../dsl/translation.yml', import.meta.url)), 'utf8'))
+const parsed = parseDifyDsl(readFileSync(fileURLToPath(new URL('../dsl/translation.yml', import.meta.url)), 'utf8'))
 const compiled = compileGraph(parsed)
 
 const isEmpty = (value) => value === undefined || value === null || value === ''
