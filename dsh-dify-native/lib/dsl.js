@@ -417,11 +417,7 @@ export function buildIR(parsed) {
   // than Dify would". `field-dropped` catches DSL values that were ignored; this
   // pass also covers gaps that fire even when the DSL said nothing (routing,
   // placeholder work, refused plugin shapes), which the field sweep cannot see.
-  for (const row of nodeDeviations({ nodes })) {
-    if (row.severity === 'rejected') diagnostics.rejected(row.nodeId, row.where ?? row.nodeKind, row.consequence, row.fix)
-    else if (row.severity === 'degraded') diagnostics.degraded(row.nodeId, row.nodeKind, row.where, row.consequence, row.fix)
-    else diagnostics.differs(row.nodeId, row.nodeKind, row.where, row.consequence, row.fix)
-  }
+
 
   // Container children: ReactFlow `parentId`, Dify's `data.iteration_id` /
   // `data.loop_id`, or (as a last resort) `isInIteration`/`isInLoop` + the
@@ -542,6 +538,13 @@ export function buildIR(parsed) {
   const entryKind = entry?.kind
 
   const start = starts[0]
+  for (const row of nodeDeviations({ nodes, topNodes })) {
+    if (row.severity === 'rejected' && !row.bites) continue
+    if (row.severity === 'rejected') diagnostics.rejected(row.nodeId, row.where ?? row.nodeKind, row.consequence, row.fix)
+    else if (row.severity === 'degraded') diagnostics.degraded(row.nodeId, row.nodeKind, row.where, row.consequence, row.fix)
+    else diagnostics.differs(row.nodeId, row.nodeKind, row.where, row.consequence, row.fix)
+  }
+
   const startVariables = (start?.data?.variables ?? []).filter((v) => v?.variable)
   const startInputs = startVariables.map((v) => v.variable)
   const requiredInputs = startVariables.filter((v) => v.required !== false).map((v) => v.variable)
@@ -986,7 +989,7 @@ function nodeSupport(ir) {
       : codesOn(node.id, 'field-dropped')
         ? 'some declared fields were dropped'
         : biting?.consequence ?? (SIMPLIFIED_KINDS.has(node.kind) ? standing?.consequence : undefined)
-    const mode = reason === undefined ? 'full' : 'simplified'
+    const mode = biting?.severity === 'rejected' ? 'rejected' : reason === undefined ? 'full' : 'simplified'
     rows.push({ id: node.id, kind: node.kind, mode, ...(reason === undefined ? {} : { reason }) })
   }
   return rows
@@ -1081,8 +1084,8 @@ const DEVIATIONS = {
     { where: null, severity: 'degraded', consequence: 'restricted to sys.datasource_type / sys.datasource_info, local file & website outputs, and explicit local/file records; a corrupt .jsonl fails the node.', fix: 'none' },
   ],
   'human-input': [
-    { where: 'nested in iteration/loop', severity: 'rejected', consequence: 'container inner checkpointing is not implemented; the graph is refused at compile time, before side effects.', fix: 'move the human-input to the top level' },
-    { where: 'inputs[].type', severity: 'rejected', consequence: 'only text / paragraph fields are supported; select / file and other advanced form fields are refused before side effects.', fix: 'reduce the form to text fields' },
+    { where: 'nested in iteration/loop', when: (_d, node, ir) => !ir.topNodes.includes(node), severity: 'rejected', consequence: 'container inner checkpointing is not implemented; the graph is refused at compile time, before side effects.', fix: 'move the human-input to the top level' },
+    { where: 'inputs[].type', when: (d) => (d.inputs ?? []).some(input => input.type && !['paragraph', 'text-input', 'text_input'].includes(input.type)), severity: 'rejected', consequence: 'only text / paragraph fields are supported; select / file and other advanced form fields are refused before side effects.', fix: 'reduce the form to text fields' },
     { where: 'timeout', severity: 'silent-changed', consequence: 'an expired pending does NOT auto-resume on its own: something must call dify_native_resume or poll before the timeout branch runs.', fix: 'drive the timeout explicitly' },
     { where: 'user_actions', severity: 'degraded', consequence: 'an explicit injected action resolves immediately; otherwise the run returns a waiting checkpoint and never replays upstream effects on resume.', fix: 'none' },
   ],
@@ -1132,8 +1135,8 @@ const DEVIATIONS = {
  * rather than text parsing: `vision.enabled === true` bites only when the export
  * actually turns vision on.
  */
-function bites(node, row) {
-  return typeof row.when === 'function' ? row.when(node.data ?? {}) : false
+function bites(node, row, ir) {
+  return typeof row.when === 'function' ? row.when(node.data ?? {}, node, ir) : false
 }
 
 /**
@@ -1189,7 +1192,7 @@ export function nodeDeviations(ir) {
       // handed to tool callers as JSON, and a function in it makes the whole
       // value fail dsh's lossless-JSON boundary for the tool result.
       const { when, ...declared } = row
-      out.push({ nodeId: node.id, nodeKind: node.kind, bites: bites(node, row), ...declared })
+      out.push({ nodeId: node.id, nodeKind: node.kind, bites: bites(node, row, ir), ...declared })
     }
   }
   return out
