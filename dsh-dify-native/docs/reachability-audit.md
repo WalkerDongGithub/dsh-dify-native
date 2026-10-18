@@ -1,4 +1,28 @@
-# simplified / placeholder 节点可达性实测
+# 当前修复状态索引
+
+限定协议下已可用，整体收尾未全部完成。**非 RAG 仍 23 个离散 S 子项：17 本地、6 需指定插件/账户/Dify 部署资料**；其中原审计 7 个非暂停组、9 个节点名仍有21项，另 conversation/HTTP 阶段 timeout 各1项。RAG #2/#3 两组、两个节点名暂停单列，不计入23。
+
+当前能力、真实失败及修复证据见 [capability-report.md](capability-report.md)；逐项验收和计数见 [semantic-gaps.md](semantic-gaps.md)。下面保留 b6f3436 的原始盘点、E1–E6 环境证据与当时建议，不代表当前代码或本轮新增缺口。
+
+| 原组 | 本轮已修基础项 | 仍有 S 子项 |
+| --- | --- | --- |
+| #1 document-extractor | 成熟库/官方固定 PDFium、合法 Office、完整官方路由、数组/失败/远程bytes；49扩展+8MIME、逐字差分 | EX1–EX7，7项 |
+| #2 / #3 RAG | 按用户要求暂停，未扩展算法 | 两组暂停，未拆入当前23项 |
+| #4 datasource / datasource-empty | sys/File/website输出、显式远端契约；不猜插件路径、不吞JSONL | DS1–DS2，2项 |
+| #5 agent | 显式有界工具循环、白名单/schema/取消/重复保护、token usage/json[] | AG1–AG4，4项 |
+| #6 trigger / trigger-webhook | 实际HTTP入口、映射/鉴权/去重、sys.*；有限支持诊断 | WH1–WH2，2项 |
+| #7 trigger-schedule | cron/时区、visual四频率/last、实际槽时间、重启补偿/去重 | SC1，1项 |
+| #8 human-input | 真waiting/快照/重开/提交/超时；动态默认变量；不自动首选、不重放上游 | HU1–HU4，4项 |
+| #9 trigger-plugin | 显式HMAC事件桥、参数映射与原生订阅诊断 | TP1，1项 |
+| 审计外 | conversation成功跨run/隔离；普通HTTP后继、TLS、官方timeout键；干净npm包 | CV1/HT1，2项 |
+
+新增 trigger*/human 参考另固定 5dff246；原始 Q1 的 cd47a47“没有此节点”结论保留。源码路径/函数见当前报告及部署协议。02d4101 初次提取方案的手写 OOXML/fitz 和错误 VTT 预期已分别在 af8c38f/fd0a86e 纠正。TLS4651731已复核。缺库明确失败，未安装 unstructured，未将资源/配置不足洗成C/D。
+
+最后全量结果见当前能力报告。原始测试及用户仓库外未跟踪内容保留；不采纳原始建议中“修改旧断言”的部分。
+
+---
+
+# 原始 simplified / placeholder 可达性审计（历史证据）
 
 审计日期：2026-10-18；工作分支：`fix/semantics-gaps`。仅盘点，不修节点、不安装依赖、不修改测试。对象取自 [capability-report.md](capability-report.md) 的支持级别表，共 11 个节点名。
 
@@ -395,7 +419,7 @@ ALL TESTS OK
 
 未改断言、未跳过失败。模型使用既有固定流；通过结果不证明外部模型、Jina、原生插件或本报告提出的新实现已经可用。
 
-## 4. S 类清单：按价值/成本排序
+## 4. 原始 S 类建议：按价值/成本排序（b6f3436 时未实施）
 
 以下是下一轮建议，**本次未实施**。行数为阅读现有文件后的工程估算，含新增实现，不是已经测量的 diff；配套测试只估范围。全部优先保正确输出形状/错误，质量可以逐步增强。所有外部配置缺失都应明确失败或显式降级，不能虚报执行。
 
@@ -447,26 +471,7 @@ ALL TESTS OK
 
 任何 fallback 都要显式配置或节点诊断。能修的输出形状、缺失字段、真假成功和错误传播不属于允许随意降级的内部质量；不得用“麻雀”掩盖它们。
 
-## 7. 本次交付边界
+## 7. 原始 audit 交付边界（b6f3436）
 
 仅新增本文件；源码、测试、依赖声明和 vendor 均未修改。工作区原有的 vendor/jieba、runs、tools 等未跟踪内容保留原样，不纳入提交。临时下载未装入运行环境；全量测试 exit 0、`ALL TESTS OK`。修复优先级与诊断方案供下一轮实施，不构成本轮已完成能力的承诺。
 
-## 2026-10-18 修复状态（以上为 b6f3436 的历史证据）
-
-#1 基础项已修但整组仍有 S 子项：数组/单文件形状、任一文件失败、完整文本、远程 bytes 已验证。02d4101 的手写 OOXML 与 fitz 方案被纠正：使用 pypdfium2==4.30.0、python-docx、pandas/openpyxl，以及固定 cd47a47 纯函数，DOCX 表格/换行、YAML/properties/VTT/CSV/JSON 转换、Excel 多 sheet/数字/公式缓存逐字对标。AST 参考源码保存于 tests/fixtures/dify-cd47a47-document-extractor.py，真实差分回归 tests/engine-extraction-differential.test.mjs。初次差分实际失败：PDF 多一个换行；修复后 8 种格式逐字通过。依赖安装、S 余项及边界见 capability-report 的 Extraction 修正段；未因现代 Office 成功宣称旧格式完成。
-
-TLS 4651731 已复核；start.config 在固定版本不存在，不凭空实现。#2/#3 RAG 继续按用户要求暂停。
-
-#4 基础项已修（2 个节点名）：系统变量、File/网站形状、独立声明式远端协议与插件边界；JSONL 吞错修复。原生 datasource 插件/认证源/文件存储仍 S 子项，见 datasource-contract.md，未标全兼容。
-
-#5 agent 基础循环已修，但原生策略插件、文件流、完整计费 usage、memory 等价仍 S 子项；不可把本地策略宣称全兼容。真实引擎证据见 engine-agent-loop.test.mjs 和 agent-strategy.md。
-
-额外 conversation 真问题已修：同会话跨 run 持久变量与隔离由 engine-conversation.test.mjs 验证；失败/崩溃期间的逐节点提交边界仍为 S 子项，未宣称完整 Dify DB 等价。
-
-#6 两节点与 #9 一节点：HTTP listener、鉴权/载荷映射、持久去重及显式签名插件桥已修；真实引擎测试 engine-events.test.mjs。新增节点参考另固定 5dff246，路径/函数与 S 边界见 event-deployment.md，未改写历史 Q1。原生订阅/文件/公网未验仍 S。
-
-#7 基础项已修：cron/时区/真实槽时间/持久补偿去重；engine-schedule.test.mjs 先失败缺调度入口，修后真实引擎通过。visual_config 四种频率及 last 已补，固定新版纯函数复用且真实引擎通过；原生服务生命周期未验证仍 S。
-
-#8 顶层真实等待/持久 checkpoint/提交/超时恢复已修；取消默认首选动作，保留显式注入。engine-human-wait.test.mjs 验证重开后恢复且上游 HTTP 不重放，等待时误新 run 明确拒绝；engine-human-form.test.mjs 验证动态内容/默认变量。容器内暂停、高级表单、自动过期通知及原生生命周期仍 S 子项。另修普通 HTTP 错误 guard 跳过下游：真实失败回归 engine-http-follow.test.mjs 已通过。
-
-#1 路由审查纠正：之前直接调用 VTT 纯函数的差分没有覆盖真实节点分派；现参考 AST 同时加载官方路由。`.vtt` 原文/无扩展 MIME=text/vtt 转换、49种官方纯文本扩展、8种本地 MIME、远程 MIME、混合失败均真实引擎通过。旧的直接选择转换不再是当前行为。

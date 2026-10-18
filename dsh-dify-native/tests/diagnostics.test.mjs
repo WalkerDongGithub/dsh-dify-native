@@ -41,6 +41,19 @@ function inspect(text) {
 }
 
 const codes = (inspection) => inspection.diagnostics.map((row) => row.code)
+
+/**
+ * Dify-semantics deviations are reported for every node of a known kind, by
+ * design (see DEVIATION_PREFIX in lib/diagnostics.js): they say "this node
+ * behaves differently from Dify on axis X" and must not depend on whether the
+ * DSL happened to set a field. The assertions below are about the
+ * *drop / unknown / support-level* contract, so they filter deviation rows out
+ * rather than switching them off — a silent global switch would let a real
+ * deviation disappear unnoticed, which is exactly what this file guards.
+ */
+const DEVIATION_CODES = new Set(['semantics-differ', 'semantics-degraded', 'node-unsupported'])
+const isDeviation = (row) => DEVIATION_CODES.has(row.code)
+const dropsOnly = (inspection) => inspection.diagnostics.filter((row) => !isDeviation(row))
 const subjects = (inspection, code) =>
   inspection.diagnostics.filter((row) => row.code === code).map((row) => row.subject.split(':')[0])
 const supportOf = (inspection, id) => inspection.support.find((row) => row.id === id)
@@ -99,7 +112,7 @@ const supportOf = (inspection, id) => inspection.support.find((row) => row.id ==
     '      - { id: m, type: custom, data: { type: llm, title: 模型, model: { provider: zai, name: glm-4.5-air, completion_params: { temperature: 0.1, top_p: 1, presence_penalty: 0, frequency_penalty: 0 } }, prompt_template: [{ role: user, text: "{{#s.q#}}" }], vision: { enabled: false } } }',
   )
   const inspection = inspect(text)
-  assert.deepEqual(codes(inspection), [], 'parameters equal to their provider default are not noise')
+  assert.deepEqual(dropsOnly(inspection), [], 'parameters equal to their provider default are not noise')
   console.log('ok 3 — top_p: 1 / zero penalties / vision disabled are not reported')
 }
 
@@ -164,7 +177,9 @@ function m_assertId(inspection) {
   for (const file of readdirSync(DSL_DIR).filter((name) => name.endsWith('.yml')).sort()) {
     const inspection = inspect(readFileSync(join(DSL_DIR, file), 'utf8'))
     assert.equal(inspection.issues.length, 0, `${file} still compiles`)
-    const reported = inspection.diagnostics.map((row) => row.subject.slice(row.subject.indexOf(':') + 1))
+    // Only field drops: deviation rows are expected on every known node kind and
+    // are asserted separately below, so they must not be mistaken for drops.
+    const reported = dropsOnly(inspection).map((row) => row.subject.slice(row.subject.indexOf(':') + 1))
     for (const field of reported) {
       assert.ok(knownDrops.has(field.split('.')[0]) && allowedTopLevel.has(field.split('.')[0]) || knownDrops.has(field), `${file}: unexpected diagnostic field ${field}`)
     }
@@ -183,7 +198,17 @@ function m_assertId(inspection) {
     const inspection = inspect(readFileSync(join(DSL_DIR, file), 'utf8'))
     assert.deepEqual(inspection.support.filter((row) => row.mode !== 'full'), [], `${file} is fully supported`)
   }
-  console.log('ok 5 — the 18 real DSL samples report only their genuine gaps; fully implemented graphs stay silent')
+  // ...while deviations from Dify semantics ARE reported on every real sample:
+  // a graph must never look pristine just because every node classifies `full`.
+  for (const file of readdirSync(DSL_DIR).filter((name) => name.endsWith('.yml')).sort()) {
+    const inspection = inspect(readFileSync(join(DSL_DIR, file), 'utf8'))
+    assert.ok(Array.isArray(inspection.deviations), `${file} exposes a deviations list`)
+    for (const row of inspection.deviations) {
+      assert.ok(DEVIATION_CODES.has({ 'silent-changed': 'semantics-differ', degraded: 'semantics-degraded', rejected: 'node-unsupported' }[row.severity]), `${file}: deviation severity ${row.severity} has a diagnostic code`)
+      assert.ok(row.consequence && row.consequence.length > 10, `${file}: deviation on ${row.nodeId} explains its consequence`)
+    }
+  }
+  console.log('ok 5 — the 18 real DSL samples report only their genuine gaps; fully implemented graphs stay silent by drop-code, and every known deviation is enumerated')
 }
 
 // ------------------------------------------------------ diagnostics never fail
@@ -193,10 +218,57 @@ function m_assertId(inspection) {
   // with a diagnostic, and `status` semantics are unchanged: no issue, no throw.
   const text = graphYaml('      - { id: m, type: custom, data: { type: totally-unknown, title: x } }')
   const ir = buildIR(parseDifyDsl(text))
-  assert.deepEqual(ir.diagnosticCodes, { 'node-unknown': 1 })
+  // start/end carry their own (always-on) deviation rows; the unknown node adds
+  // exactly one node-unknown and the passthrough deviation explaining its silence.
+  assert.deepEqual({ ...ir.diagnosticCodes, 'semantics-differ': 0, 'semantics-degraded': 0 }, { 'node-unknown': 1, 'semantics-differ': 0, 'semantics-degraded': 0 }, 'unknown node type is still the only drop-class code')
+  assert.equal(ir.diagnosticCodes['node-unknown'], 1)
   assert.equal(ir.issues, undefined, 'buildIR carries no issue list; inspection does')
   assert.equal(inspect(text).issues.length, 0)
   console.log('ok 6 — diagnostics are advisory: they never become compile issues')
+}
+
+
+// ------------------------------------- known deviations are always reported
+
+{
+  // Every node kind this runtime executes must enumerate its Dify deviations,
+  // so no node can look pristine merely because it classifies `full`. These are
+  // the user-facing "this succeeds but does something else" warnings.
+  const cases = {
+    // LLM: routed to another model is the flagship silent gap.
+    llm: '      - { id: m, type: custom, data: { type: llm, title: 模型, model: { provider: zai, name: glm-4.5-air }, prompt_template: [{ role: user, text: "{{#s.q#}}" }] } }',
+    // knowledge-index succeeds while writing nothing.
+    'knowledge-index': '      - { id: m, type: custom, data: { type: knowledge-index, title: 索引, dataset_id: ds, index_chunk_variable_selector: [s, q] } }',
+    // A plugin-shaped tool is refused, not silently swapped for another tool.
+    tool: '      - { id: m, type: custom, data: { type: tool, title: 工具, provider_type: plugin, provider_id: p, tool_name: jina_reader } }',
+  }
+  for (const [kind, middle] of Object.entries(cases)) {
+    const inspection = inspect(graphYaml(middle))
+    // graphYaml always contributes s (start) and e (end), which carry their own
+    // deviations; scope to the node under test.
+    const row = inspection.deviations.filter((item) => item.nodeId === 'm')
+    assert.ok(row.length > 0, `${kind} must enumerate at least one deviation`)
+    for (const item of row) {
+      assert.equal(item.nodeKind, kind)
+      assert.ok(['silent-changed', 'degraded', 'rejected'].includes(item.severity), `${kind}: severity ${item.severity} is from the fixed vocabulary`)
+      assert.ok(item.consequence.length > 10, `${kind}: deviation explains the consequence`)
+      assert.ok(item.where === null || typeof item.where === 'string', `${kind}: where is null or a DSL field/condition`)
+    }
+    // The mirrored diagnostic codes exist too, under the deviation namespace so
+    // they can never be mistaken for a `field-dropped` on an implemented field.
+    const mirrored = inspection.diagnostics.filter((d) => isDeviation(d) && d.subject.startsWith('~m'))
+    assert.ok(mirrored.length > 0, `${kind}: deviations are mirrored as diagnostics`)
+    for (const d of mirrored) assert.ok(d.subject.startsWith('~'), `${kind}: deviation subject ${d.subject} is namespaced`)
+  }
+
+  // Deviations must never downgrade a support level: that would collapse the
+  // mode taxonomy (everything known would read `simplified`).
+  const llmOnly = inspect(graphYaml(cases.llm))
+  assert.equal(supportOf(llmOnly, 'm').mode, 'full', 'a plain llm with no dropped field stays full')
+
+  // ...and they must never become compile issues.
+  assert.equal(llmOnly.issues.length, 0, 'deviations never block compilation')
+  console.log('ok 7 — known deviations from Dify are always enumerated, namespaced, and never downgrade support')
 }
 
 console.log('DIAGNOSTICS TESTS OK')

@@ -104,8 +104,14 @@ function systemVariables(session) {
  * level. Warnings never fail a run: they record what the graph will *not* do.
  */
 function nodeDiagnostics(inspection, nodeId) {
-  // Field-drop subjects are `"<nodeId>:<field>"`; node-level subjects are the id.
-  const rows = (inspection?.diagnostics ?? []).filter((row) => row.subject === nodeId || row.subject.startsWith(`${nodeId}:`))
+  // Field-drop subjects are `"<nodeId>:<field>"`; node-level subjects are the id;
+  // deviation rows are `"~<nodeId>"` or `"~<nodeId>:<where>"` (see DEVIATION_PREFIX).
+  const rows = (inspection?.diagnostics ?? []).filter(
+    (row) => row.subject === nodeId
+      || row.subject.startsWith(`${nodeId}:`)
+      || row.subject === `~${nodeId}`
+      || row.subject.startsWith(`~${nodeId}:`),
+  )
   const support = (inspection?.support ?? []).find((row) => row.id === nodeId)
   return {
     ...(support?.mode !== undefined && support.mode !== 'full' ? { mode: support.mode } : {}),
@@ -124,14 +130,46 @@ function renderInspect(_args, value) {
   }
   if ((value.issues ?? []).length > 0) lines.push(`issues: ${value.issues.join('; ')}`)
   if (value.compileError) lines.push(`compile error: ${value.compileError}`)
-  // Engineer-facing support report: only nodes that are not fully implemented.
-  const partial = (value.support ?? []).filter((row) => row.mode !== 'full')
-  if (partial.length > 0) {
+
+  // Deviations from Dify, ordered by how easily they bite. Read this before the
+  // raw diagnostics: it is the same information, prioritised for a human.
+  const deviations = value.deviations ?? []
+  const bySeverity = (severity) => deviations.filter((row) => row.severity === severity)
+  // A passthrough node does NO work but still reports success. That is the most
+  // dangerous case because nothing in the output looks wrong.
+  const passthrough = (value.support ?? []).filter((row) => row.mode === 'passthrough' || row.mode === 'placeholder')
+  if (passthrough.length > 0) {
     lines.push(
-      'support (nodes not fully implemented):',
-      ...partial.map((row) => `- ${row.id} ${row.kind}: ${row.mode} — ${row.reason}`),
+      '!! RUNS BUT DOES NOT DO THE WORK:',
+      ...passthrough.map((row) => `- ${row.id} ${row.kind}: ${row.mode} — ${row.reason}`),
     )
   }
+  const rejected = bySeverity('rejected')
+  if (rejected.length > 0) {
+    lines.push(
+      '!! CANNOT DO THIS (fails or refused, never silent):',
+      ...rejected.map((row) => `- ${row.nodeId} ${row.nodeKind}${row.where ? ` [${row.where}]` : ''}: ${row.consequence}`),
+    )
+  }
+  const changed = bySeverity('silent-changed')
+  if (changed.length > 0) {
+    lines.push(
+      '!! SUCCEEDS BUT DOES SOMETHING ELSE (silent, output can look fine):',
+      ...changed.map((row) => `- ${row.nodeId} ${row.nodeKind}${row.where ? ` [${row.where}]` : ''}: ${row.consequence}`),
+    )
+  }
+  const degraded = bySeverity('degraded')
+  if (degraded.length > 0) {
+    lines.push(
+      '!  REDUCED FIDELITY:',
+      ...degraded.map((row) => `- ${row.nodeId} ${row.nodeKind}${row.where ? ` [${row.where}]` : ''}: ${row.consequence}`),
+    )
+  }
+  if (deviations.length > 0) {
+    const fixes = deviations.filter((row) => row.fix).length
+    lines.push(`(${deviations.length} deviations from Dify; ${fixes} come with a fix. Full list under "deviations" in this object.)`)
+  }
+
   if ((value.diagnostics ?? []).length > 0) {
     lines.push(
       `diagnostics (${Object.entries(value.diagnosticCodes ?? {}).map(([code, n]) => `${code}×${n}`).join(', ')}):`,

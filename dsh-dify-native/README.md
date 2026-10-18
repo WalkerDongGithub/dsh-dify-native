@@ -1,8 +1,318 @@
 # dsh-dify-native
 
-在 **dsh harness 自己的能力上**执行真实的 Dify 工作流 `.yml`。
+直接跑 Dify 导出的工作流 `.yml`，执行引擎用 dsh 自带的引擎、沙箱和模型服务，不用另外部署 Dify。
 
-把 Dify DSL 翻译成编排脚本，交给 harness 的真实引擎、沙箱和模型服务执行。另提供显式配置的本地事件/定时桥与人工等待快照；完整能力及 S 余项见 [当前能力报告](docs/capability-report.md)。
+这篇 README 是给**用它的人**看的，回答三个问题：
+
+1. [装好怎么用](#一安装三分钟) —— 三步，不需要改 dsh 源码。
+2. [**哪些工作流能保证跑**](#二绿灯区能保证跑工作流) —— 经过真实引擎实测、有测试兜底的。
+3. [**哪些工作流有风险**](#三黄灯区能跑但要看清代价红灯区大概率跑不通) —— 分黄、红两档，每种都写了具体会发生什么、怎么自查。
+
+> 判断你自己那张图属于哪一档的方法在[第五节](#五自查先-inspect-再-run)：**先 `dify_native_inspect`，它会把每个节点标成 full / simplified / placeholder / passthrough，再决定要不要 run。**
+
+如果你是想改这个包的人和 agent：内部设计、诊断机制、文件职责在[文末](#八给开发者和-agent-的内部说明)，其中"为什么是这个形状"一节解释了两个被引擎接口逼出来的设计决定。
+
+---
+
+## 一、安装（三分钟）
+
+### 1. 挂进 profile
+
+```jsonc
+// ~/.dsh/profiles/<name>/package.json
+"dependencies": { "dsh-dify-native": "link:/home/walker/dify-test/dsh-dify-native" }
+```
+
+`package.json` 里已经声明了 bundle patch，profile 的 `dsh.profile.bundles` 里加一行 `dsh-dify-native` 即可。
+改代码即时生效，不需要重新打包。
+
+### 2. 装可选依赖（只装你要用的）
+
+```sh
+cd /home/walker/dify-test/dsh-dify-native
+
+./scripts/install-extraction.sh   # 只在用 document-extractor 时：PDF / DOCX / XLSX
+./scripts/install-events.sh       # 只在用 cron 定时、webhook 入站时
+```
+
+两个脚本都装到插件**自己新建**的目录（`.vendor-extraction` / `.vendor-events`），不碰你现有 Python 环境；目录已存在会拒绝覆盖，所以重复跑是安全的。
+
+### 3. 跑一张图
+
+```jsonc
+// dify_native_inspect —— 只解析，不执行，先看这张图什么成色
+{ "path": "/abs/path/to/workflow.yml" }
+
+// dify_native_run —— 真跑
+{
+  "path": "/abs/path/to/workflow.yml",   // 必填
+  "inputs": { "llm_string": "{...}" },   // start 节点声明的变量
+  "timeout": 120,                        // 单个 code 节点的超时秒数
+  "tracePath": "/path/to/record.json"    // 可选：完整逐节点运行记录落盘
+}
+```
+
+缺了 start 节点声明的必填变量时，会在启动引擎前就拒绝，不会跑一半才报错。
+
+装完想确认环境到底暴露了哪些能力（引擎 / 沙箱 / 模型 / 工具），调 `dify_native_services`；想确认沙箱真的生效，调 `dify_native_sandbox_probe`。
+
+---
+
+## 二、绿灯区：能保证跑的工作流
+
+"保证"在这里的意思是：**有真实引擎测试兜底，回归里断言的是实际 outputs 而不是"没报错"**。全部 18 个真实样本都走 `workflowEngine.start → 子进程 → sandbox/HTTP/工具 → outputs` 全链路，没有 mock 引擎，LLM 用固定回复，不花模型钱。
+
+### 2.1 节点：可以放心用
+
+| 节点 | 你需要注意的 |
+| --- | --- |
+| `start` / `end` / `answer` | — |
+| `llm` | 见[3.1](#31-llm-实际跑在哪个模型上可能和你导出的不一样)——模型路由可能和导出时不符，但记录里可追溯 |
+| `if-else` | 分支编译成普通 `if`，模型不参与决定走哪边 |
+| `code` | **只在沙箱里跑**；拿不到沙箱直接拒绝执行，不会裸跑。支持 `python3` 和 `javascript` |
+| `template-transform` | 完整两层语法：`{{#node.var#}}` 由编译器预替换，其余交给 Jinja2（经 nunjucks）。纯变量拼接零模型调用 |
+| `variable-aggregator` | 按 Dify 1.9.1 语义取第一路**存在**的变量；组模式支持 |
+| `assigner` / `list-operator` | — |
+| `iteration` / `loop` | 编译成普通 `for` / `while`；`is_parallel: true` 用引擎的 parallel 组合子；嵌套容器已修 |
+| `question-classifier` / `parameter-extractor` | 真实 provider 解析，固定 JSON 下逐字断言 |
+| `template-transform` 的 Jinja 循环 / 过滤器 | `for` / `if` / `set` / 嵌套 / `upper` `round` `join` `default` `sort` `map` `sum(attribute=)` `tojson` `unique` 均可用；写错会报错，不会把模板原文当结果返回 |
+
+### 2.2 文档提取：可以放心用（需先装 extraction 依赖）
+
+PDF、DOCX、XLSX、CSV、JSON、YAML、VTT（.vtt 保留原文）、txt 类文本。
+
+- 用的是**固定版本的官方函数**（PDFium 4.30.0 / python-docx / pandas+openpyxl），不是另写一套；8 种格式的输出和官方函数**逐字相等**，有差分测试守着。
+- 路由和 Dify 完全一致：**扩展名优先，没有扩展名才看 MIME**。49 个官方文本扩展名 + 8 个仅 MIME 格式都验证过。
+- 一次提取多个文件时，**任何一个失败整个节点就失败**，不会悄悄跳过。
+- 单文件文本上限 4 MiB，超了明确报错，不会静默截断成半截。
+
+### 2.3 其他已验证的完整场景
+
+| 场景 | 已验证到什么程度 |
+| --- | --- |
+| HTTP 请求（GET/POST 等，含自签证书站点） | `ssl_verify: false` 只对这一次请求关校验；`true` / 不写会校验证书；`null` 明确失败 |
+| 普通 HTTP 成功后接下游节点 | 修过"成功后下游被跳过"的真实 bug，现在响应真的进下游 |
+| 同会话多轮对话的状态 | 同会话同工作流跨 run 变量持久（1→2），不同会话互相隔离 |
+| 定时触发 `trigger-schedule` | 五字段 cron + IANA 时区，槽时间是真实槽时间；重启补偿、持久去重 |
+| 定时触发 visual_config | hourly / daily / weekly / monthly（含 last）四种频率 |
+| webhook 入站 `trigger` / `trigger-webhook` | 真实 HTTP 监听 → 载荷/header/query 映射、鉴权、状态码、持久去重、`sys.*` 输出 |
+| 人工等待 `human-input`（顶层） | 真等待 + 持久化快照，重开不重放上游副作用；提交/超时分支；动态表单与变量默认值 |
+| agent 节点 | 显式 `dsh-bounded-tools` 有界工具循环：白名单、schema 校验、结果回灌、重复调用/上限/取消保护 |
+
+### 2.4 18 个实测样本（可以直接参考写法）
+
+| 样本 | 用到的节点 | 结果 |
+| --- | --- | --- |
+| `json-repair` | code | 修坏 JSON，真实 sandbox Python |
+| `translation` | if-else, variable-aggregator | 两分支都跑，未执行分支不污染输出 |
+| `seo-slug` | llm + 模板 | 标题真的注入了模型请求 |
+| `jieba` | code | `你好世界` → `['你好','世界']`（注：样本写的是 paddle 模式，实际未用 Paddle 神经网络分词） |
+| `form-demo` | assigner, code, if-else, template-transform | 登录成/败两分支，聊天分支走会话记忆 |
+| `mature-ticket-triage` | if-else, iteration, parameter-extractor, aggregator, template | high/normal 两分支，顺序 iteration |
+| `nodes-code-languages` | code（JS + Python） | 5 → JS 翻倍 → Python 加一 → 11 |
+| `nodes-iteration` | iteration | 并行三项按序、空数组启动 0 个子 agent |
+| `nodes-loop` | loop | rounds=3 → 三个输出对象 |
+| `nodes-list-operator` | list-operator | 过滤/排序/截取 |
+| `nodes-parameter-extractor` | parameter-extractor | 解析出 name/city |
+| `nodes-parameter-extractor` / `nodes-agent` | agent | 见黄灯区 4.2 |
+| `nodes-document-extractor` | document-extractor | 见黄灯区 4.3 |
+| `nodes-datasource` | datasource | 见黄灯区 4.4 |
+| `nodes-trigger` | trigger-webhook | 事件注入跑通 |
+| `intent-reply` | question-classifier, knowledge-retrieval, aggregator | 见黄灯区 4.6（检索是词法不是向量） |
+| `lang-consistency` | tool（jina_reader 契约） | 测试里用**本地 HTTP fixture**；直连公网 Jina 实测失败，见 3.5 |
+| `python-coding` | llm | 回答代码，不执行代码 |
+
+---
+
+## 三、黄灯区（能跑但要看清代价）、红灯区（大概率跑不通）
+
+### 黄灯：能跑，结果形状是对的，但语义**不是** Dify 的那个语义
+
+这些节点跑得通、输出形状正确、测试也在跑，**但如果你把它当成"和 Dify 一致"就会踩坑**。`inspect` 会把它们标成 `simplified`。
+
+#### 3.1 `llm` 实际跑在哪个模型上，可能和你导出的不一样
+
+DSL 里的 `model.provider` / `model.name` 是**请求**，不是命令。实际路由顺序：
+
+1. `DIFY_LLM_PROVIDER` + `DIFY_LLM_MODEL`（两个都设了才生效）
+2. DSL 声明的 provider，**且当前 profile 真的注册了它**
+3. profile 的默认模型
+4. 都不满足 → 退回 DSL 声明，但标 `dsl-unverified`
+
+**所以 DSL 写 deepseek、实际跑在 glm 上是完全可能的。** 好消息是每个 LLM 节点的记录里都有 `meta.provider` / `meta.model` / `meta.routeSource`，事后能查。"能不能接受这个模型差异"是你的事，但它不会瞒着你。
+
+另外：样本里带 vision 配置的 llm 节点会有 `field-dropped` 诊断——**文本路径成功不等于图像理解成功**。
+
+#### 3.2 `agent` 节点：跑的是替代策略，不是 Dify 原生 agent 插件
+
+- 用的是显式 `dsh-bounded-tools` 有界工具循环（旧单轮路径也保留）。工具白名单、JSON Schema 校验、结果回灌、重复调用保护、上限、取消都验证过。
+- **原生 agent 策略插件不支持**（需要 Dify plugin daemon）。
+- **工具产生文件不会出现在最终 `files` 里**（一直固定 `files: []`）。
+- **`memory` / window 已声明但不接真实会话**，不影响模型请求。
+- **usage 只汇总 token 子集**，没有完整计费字段；**没有价格信息时不给费用数字**（不会给你编一个 0）。
+
+#### 3.3 `document-extractor`：现代格式保证，老格式明确失败
+
+- ✅ PDF / DOCX / XLSX / CSV / JSON / YAML / VTT / 纯文本：见 2.2。
+- ❌ **`.doc` / `.ppt` / `.pptx` / `.epub` / `.eml` / `.msg` / `.xls` 会明确失败**（提示缺转换链/缺库）。它**不会**假装成功，也不会拿"按 ZIP 猜读"糊弄你。
+- ❌ 不承诺 OCR，扫描版 PDF 提不出字。
+- ❌ 不安装重量级 `unstructured`。
+
+#### 3.4 `datasource` / `datasource-empty`：本地文件/网站可以，原生插件不行
+
+- ✅ `sys.datasource_type` / `sys.datasource_info` 真注入；本地 file 与 website 信息输出；显式声明的 HTTP 远端契约。
+- ✅ 显式 local/file records 保留（`.jsonl` 损坏会**失败**，不再吞错）。
+- ❌ **原生 online_document / online_drive 插件不支持**，需要具体插件包 + 账户 + Dify 文件存储配置。
+- ❌ 不会去猜插件路径（这是修过的真实 bug）。
+
+#### 3.5 `tool` 节点：只有两条路，且 `.difypkg` 一定不行
+
+按顺序：
+
+1. **声明式 YAML 契约**（`DIFY_TOOLS_ROOT` 下，一次 HTTP 请求 + 响应字段映射）；
+2. **显式 opt-in 的宿主工具**（`DIFY_TOOL_PASSTHROUGH` 里列出的确切工具名）；
+3. 否则拒绝。
+
+关键点：
+
+- **`.difypkg` 插件形态的工具不支持**——需要 Dify plugin daemon，明确拒绝。
+- **没有名字猜测表**：`jina_reader` 不会被偷偷换成 `web_fetch`。
+- 契约只覆盖"一次 HTTP 请求 + 取字段"：**没有参数类型转换、没有 schema 校验、JSON body 只有一层映射**；OAuth、多步调用、需要签名的工具表达不了。
+- 契约会把 `tool_configurations` 当凭据拼进请求，所以**契约文件和工作流都必须可信**。
+- 契约格式见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md)。
+- ⚠️ 样本里那个 `jina_reader` 契约直连 `r.jina.ai`，**在本机实测请求失败**（`fetch failed`，curl 探测 20 秒超时），测试是用本地 fixture 端点验证的。也就是说：**这条链路你这边现在跑不通，需要你自己处理网络或换端点。**
+
+#### 3.6 `knowledge-retrieval`：不是向量检索
+
+在本地目录上做**词法 grep**（含 CJK bigram），不是 embedding、不是向量库。
+
+- `dataset_ids` 会按 `DIFY_KNOWLEDGE_ROOT`（默认 `<workspace>/knowledge`）解析成本地目录；找不到就**报错并列出缺失的 id**，不会静默返回空。
+- 注意：写成绝对路径的 id 会原样使用。
+
+#### 3.7 `http-request` 的 timeout：三个键折成一个总截止时间
+
+`timeout.connect` / `read` / `write` 三个键**会被读取并生效**，但实现上是折合成一个 `curl --max-time` 总截止时间，**不是三个独立阶段预算**。所以 `inspect` 如实报 `simplified`。你要的是"请求别超过 N 秒"——可用；你要的是"连接 1 秒、读 5 秒"这种精细控制——做不到。
+
+### 红灯：大概率跑不通，或者跑了也不算数
+
+| 你的工作流里有… | 会发生什么 | 怎么办 |
+| --- | --- | --- |
+| **`.difypkg` 插件工具** | 明确拒绝执行 | 改写成声明式 YAML 契约，或换成宿主已有工具 |
+| **原生 agent 策略插件** | 不执行，走替代策略或失败 | 接受 `dsh-bounded-tools` 替代，或别用 |
+| **原生 datasource / online_drive 插件** | 不支持 | 用声明式远端契约，或本地文件 |
+| **原生插件事件订阅**（`trigger-plugin` 订阅） | 不执行原生订阅；只有显式 `bridge: true` 的 HMAC 签名 HTTP 桥能顶一部分 | 用 webhook + 签名桥 |
+| **原生 Dify 调度服务互通** | 不接 `ScheduleService`，只有本地声明的 cron | 用本地 cron |
+| **容器内（iteration/loop 里）的 `human-input`** | 编译前拒绝 | 把人工等待挪到顶层 |
+| **高级表单字段（select / file）** | 编译前拒绝；只支持 text / paragraph | 降低表单类型 |
+| **`human-input` 到期自动恢复** | 不会自动跑，需要你显式调 `dify_native_resume` 或轮询 | 自己写轮询 |
+| **multipart / 二进制 / 文件上传 webhook** | 显式拒绝这些 content_type | 先上传拿文件描述再传 |
+| **webhook 异步返回 / 自定义 response_body / 长超时** | 只实现了状态码配置；同步返回运行记录 | 别依赖异步模式 |
+| **`knowledge-index`** | 会被调度，但**什么都不写**（没有向量库），返回 `status: not_written, indexed: 0` | 别指望它建索引 |
+| **Dify 未来版本的新节点类型** | 标 `node-unknown` + `passthrough`：**不报错、图继续走、但不干这个节点的活** | 这是最阴的一种，务必先 inspect |
+| **`custom-note`** | 只是画布标注，本来就不执行 | — |
+
+---
+
+## 四、安全边界：只跑可信来源的 `.yml`
+
+这条单独拎出来，因为它是**当前设计上的边界，不是可以靠配置绕过的**。
+
+### 4.1 Jinja 模板不是沙箱
+
+`template-transform` 的模板在 JS 侧由 nunjucks 渲染，而 nunjucks **不是沙箱**：模板里的属性访问可以沿着 JS 原型链走到宿主运行时。例如：
+
+```jinja
+{{ a["constructor"]["constructor"]("return process")() }}
+```
+
+在当前 Node ESM 环境下，这样能取到 `process` 对象。进一步的利用（`process.mainModule.require` 读文件）目前被 ESM 环境挡住——但那是**环境巧合，不是设计保证**。
+
+`lib/jinja.js` 已经在 nunjucks 的 `runtime.memberLookup` 上拦截了 `constructor` / `__proto__` / `prototype` 等一组危险属性名，实测上面这行会被告警挡住、正常属性访问不受影响。但这是**一层缓解，不是完整沙箱**：模板仍然能调用上下文里传入的函数。
+
+**结论：只运行你自己可信来源的工作流。不要让不可信用户提交的模板直接跑。** 真要彻底解决，需要把模板渲染放进 `ctx.sandbox` 隔离的子进程——那是另一项工作。
+
+### 4.2 其他边界
+
+- **`code` 节点**：只在 `ctx.sandbox.confine` 里跑，没有沙箱直接报错，不降级裸跑。但本机沙箱后端是 `landlock-run`，报 `partial` enforcement（旧 Landlock ABI），**不能据此声称完整隔离**。
+- **`document-extractor`**：本地路径必须解析在 workspace 或 `DIFY_DOCUMENT_ROOT` 之内，越界拒绝。
+- **`tool` 节点**：白名单先于任何解析；默认 `web_search,web_fetch`，精确匹配没有通配；`DIFY_TOOL_ALLOW=*` 全放开（慎用）。
+
+---
+
+## 五、自查：先 inspect 再 run
+
+**这是判断"我这张图行不行"最快的方法，比读文档准。**
+
+`dify_native_inspect` 只解析不执行，返回每个节点的支持级别和被丢弃的字段：
+
+```
+full         没有检测到降级原因 —— 注意：是"没检测到"，不是"已和 Dify 逐字段验证过"
+simplified   只实现了 Dify 语义的子集（带理由）
+placeholder  被调度了，但不做该节点的实际工作
+passthrough  未知类型，图能继续走，但不执行该节点的实际工作
+```
+
+同时会报诊断：
+
+```
+field-dropped          DSL 写了值，但运行时不读这个字段，值被忽略
+node-simplified        节点只实现了子集
+node-placeholder       节点被调度但不干实际工作
+node-unknown           未知节点类型，passthrough
+template-jinja-invalid 模板写错了（执行到该节点会失败，但 inspect 阶段就能看到）
+note                   编译器自己的结构性提示
+```
+
+**看 `field-dropped` 和 `node-unknown` 就够了**：出现前者说明你图上某个设置不会生效，出现后者说明有个节点根本不会被执行。
+
+诊断**从不改变行为**：带诊断的图照样执行、照样返回 `succeeded`。所以别拿"跑成功了"当"语义对了"的证据。
+
+---
+
+## 六、环境变量
+
+全部可选：
+
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `DIFY_LLM_PROVIDER` + `DIFY_LLM_MODEL` | — | 强制 LLM 路由，**两个都要设才生效** |
+| `DIFY_TOOL_ALLOW` | `web_search,web_fetch` | tool 节点白名单，逗号分隔，精确匹配；`*` 全放开 |
+| `DIFY_TOOLS_ROOT` | —（无契约） | 声明式工具契约根目录，**冒号分隔**多个，递归扫 `*.yaml` / `*.yml` |
+| `DIFY_TOOL_PASSTHROUGH` | —（不放开） | 允许 tool 节点按**确切名字**调用的宿主工具，逗号分隔 |
+| `DIFY_KNOWLEDGE_ROOT` | `<workspace>/knowledge` | knowledge-retrieval 的数据集根目录 |
+| `DIFY_DOCUMENT_ROOT` | `<workspace>` | document-extractor 的文件根目录 |
+| `DIFY_RUNTIME_PYTHON` | `python3` | 执行 code 节点的解释器 |
+| `DIFY_PYTHONPATH` | 自动探测 | Python 的 `PYTHONPATH` |
+| `DIFY_VENDOR_DIR` | 同 `DIFY_PYTHONPATH` | code 节点 `dependencies` 的安装目录 |
+| `DIFY_EXTRACTION_VENDOR` | `.vendor-extraction` | 文档提取依赖的安装目录 |
+| `DIFY_EVENTS_VENDOR` | `.vendor-events` | cron / event 依赖的安装目录 |
+| `DIFY_STATE_DIR` | `<workspace>/.dify-native-state` | conversation 状态的落盘目录 |
+| `DSH_DIFY_RUNTIME_ROOT` | `../dsh-dify-runtime/runtime` | 找 vendored Python 库的根 |
+| `DSH_ENTRY` | PATH 里的 `dsh` | 手动指定 dsh 发行版入口（只有跑测试时需要） |
+
+---
+
+## 七、我自己验证一遍
+
+```sh
+cd /home/walker/dify-test/dsh-dify-native
+./tests/run-all.sh        # → ALL TESTS OK
+```
+
+**这不是纯离线单元测试。** 33 个测试入口里主体是**打到你机器上已装 dsh 的真实引擎测试**：真实 `workflowEngine.start`、真 sandbox 子进程、真 HTTP 回环服务、真 Python 提取。LLM 用固定回复，不花模型钱。
+
+它需要：已装 dsh（本机 0.2.0-rc.2）、可用的本地 sandbox 后端、Node、Python3、ripgrep，以及提取/cron 的显式依赖（就是上面两个 `install-*.sh`）。`package-deployment` 那项还需要 npm registry 网络。**任何缺失或失败都会让整个脚本退出失败——不 skip、不吞错。**
+
+> 需要说明边界：这套测试证明的是"实现符合意图、真引擎确实跑出这些 outputs"，**不**证明"和 Dify 官方执行器逐字段一致"。后者只对文档提取做了逐字差分（8 种格式）。逐节点能力证据以 [docs/capability-report.md](docs/capability-report.md) 为准，剩余缺口逐条列在 [docs/semantic-gaps.md](docs/semantic-gaps.md)（非 RAG 共 23 项，其中 17 项可本地继续做、6 项必须要有真实插件/账户/部署资料）。
+
+---
+
+## 八、给开发者和 agent 的内部说明
+
+<details>
+<summary>展开：内部架构、设计决定、文件职责、测试清单</summary>
+
+### 8.1 链路
 
 ```
 Dify .yml
@@ -17,56 +327,11 @@ Dify .yml
         └─ ctx.tools.execute ───────── 显式 opt-in 的宿主工具 passthrough
 ```
 
-`lib/` 不 import 任何 `@deepseek-ai/*` 运行期类，全部从注入的 Cordis 上下文里取
-。
-**dsh 源码零改动。**
+`lib/` 不 import 任何 `@deepseek-ai/*` 运行期类，全部从注入的 Cordis 上下文里取。**dsh 源码零改动。**
 
-三个 JavaScript 依赖都由插件直接声明并锁定，安装在插件自己的 node_modules：
+三个 JavaScript 依赖（`yaml` / `ajv` / `nunjucks`）都由插件直接声明并锁定，装在插件自己的 `node_modules`。源码检出用 `npm ci`。
 
-| 依赖 | 用途 |
-| --- | --- |
-| yaml | DSL 与声明式契约解析 |
-| ajv | 结构化输出与 agent 工具参数的 JSON Schema 校验 |
-| nunjucks | Jinja2 模板渲染 |
-
-源码检出用 `npm ci`。npm 包包含 Python requirements、安装脚本及部署文档；提取/调度依赖安装到新的插件自有目录，既有目录拒绝覆盖。完整步骤与干净打包验证见 [部署说明](docs/deployment.md)。
-
-
----
-
-## 为什么是这个形状
-
-有两个被引擎接口逼出来的设计决定，它们解释了这个包为什么长成这样。
-
-### 1. 节点分派只能发生在 subagent provider 上
-
-工作流引擎交给脚本的宿主钩子只有一个：`agent(prompt, opts)`。
-`opts.provider` 指的是 **LLM 路由**，不是 subagent provider——subagent provider 在
-整轮 run 里是固定的。
-
-所以做不到「每个节点换一个 provider」，只能整轮挂一个 `dify-node` provider，
-由它在每次 `agent()` 调用时收到一份 JSON 节点请求，按里面的 `kind` 分派。
-
-这不是取巧，这是在不改 dsh 源码的前提下**唯一**的非侵入位置。
-
-### 2. 分支是代码，不是运行期调度器
-
-`if-else` / `question-classifier` / `http-request` / `human-input` 的出边 handle 是
-**预声明的分支名**。编译器把它们翻译成普通的 `if` 块，并给每个节点一个激活守卫：
-
-```js
-if ((__ran["s"] === true)) { /* 入口节点 */ }
-if ((__ran["br"] === true && __branch["br"] === "true")) { /* true 分支 */ }
-```
-
-没被激活的节点不执行，它的结果变量保持 `undefined`。于是**汇合点不需要任何运行期
-调度逻辑**——直接读变量就行。模型只负责回答问题，从不决定走哪条边。
-
----
-
-## 四个工具
-
-插件往 profile 里注册这四个工具：
+### 8.2 六个工具
 
 | 工具 | 作用 |
 | --- | --- |
@@ -74,353 +339,104 @@ if ((__ran["br"] === true && __branch["br"] === "true")) { /* true 分支 */ }
 | `dify_native_services` | 报告当前 profile 暴露了哪些能力：engine / sandbox / subagent providers / LLM providers / models / 默认模型 / 工具。 |
 | `dify_native_sandbox_probe` | 在**活的 harness 里**证明沙箱真的生效：workspace-write 能写、read-only 被拒。 |
 | `dify_native_run` | 编译并执行，返回工作流最终 `outputs` 加逐节点记录。 |
+| `dify_native_resume` | 向持久化的 `human-input` 等待点提交显式 action；已完成的提交绝不重放。 |
+| `dify_native_events` | 启动显式配置的本地事件监听，直到 context 被 dispose。 |
 
-`dify_native_run` 的入参：
+### 8.3 为什么是这个形状
 
-```jsonc
-{
-  "path": "/abs/path/to/workflow.yml",   // 必填
-  "inputs": { "llm_string": "{...}" },   // start 节点声明的变量
-  "timeout": 120,                        // 单个 code 节点的超时秒数
-  "tracePath": "/path/to/record.json"    // 可选：把完整运行记录落盘
-}
+有两个被引擎接口逼出来的设计决定，它们解释了这个包为什么长成这样。
+
+**1. 节点分派只能发生在 subagent provider 上。** 工作流引擎交给脚本的宿主钩子只有一个：`agent(prompt, opts)`。`opts.provider` 指的是 **LLM 路由**，不是 subagent provider——subagent provider 在整轮 run 里是固定的。所以做不到"每个节点换一个 provider"，只能整轮挂一个 `dify-node` provider，由它在每次 `agent()` 调用时收到一份 JSON 节点请求，按里面的 `kind` 分派。这不是取巧，这是在不改 dsh 源码的前提下**唯一**的非侵入位置。
+
+**2. 分支是代码，不是运行期调度器。** `if-else` / `question-classifier` / `http-request` / `human-input` 的出边 handle 是**预声明的分支名**。编译器把它们翻译成普通的 `if` 块，并给每个节点一个激活守卫：
+
+```js
+if ((__ran["s"] === true)) { /* 入口节点 */ }
+if ((__ran["br"] === true && __branch["br"] === "true")) { /* true 分支 */ }
 ```
 
----
+没被激活的节点不执行，它的结果变量保持 `undefined`。于是**汇合点不需要任何运行期调度逻辑**——直接读变量就行。模型只负责回答问题，从不决定走哪条边。
 
-## 节点支持
+### 8.4 解析层覆盖的节点类型
 
-### 解析层：覆盖已知的节点类型
+`lib/dsl.js` 认识 Dify 前端 `BlockEnum` 里的 **30 个类型**（见 `tests/coverage.test.mjs` 里的 `BLOCK_ENUM` 列表，以该列表为准），再加 3 个导出里出现的别名 / 标记（`custom-note`、`iteration-end`、`trigger`），全部归一化成 IR kind，没有一个会掉到 `generic`。
 
-`lib/dsl.js` 认识 Dify 前端 `BlockEnum` 里的 **30 个类型**（见 `tests/coverage.test.mjs` 里的
-`BLOCK_ENUM` 列表，以该列表为准），再加 3 个导出里出现的别名 / 标记
-（`custom-note`、`iteration-end`、`trigger`），全部归一化成 IR kind，没有一个会掉到 `generic`。
+**这只是解析层的事实**：它证明"认识"这些类型，不等于"执行语义完整"。而且它只覆盖写死的列表——Dify **未来版本**新增的节点类型不在里面。
 
-**这只是解析层的事实**：它证明"认识"这些类型，不等于"执行语义完整"。而且它只覆盖写死的列表——
-Dify **未来版本**新增的节点类型不在里面，会被当作未知类型（`node-unknown` 诊断 + `passthrough` 支持级别），
-不会导致整张图失败，但也不会执行该节点的实际工作。
-
-执行层按节点逐级实现，并且**如实标注每一级的成色**（见下一节）。下面的"完整语义"是
-**支持级别的标签**——即"没有已知的降级原因"，不是"Dify 的全部语义都由本运行时验证过"。
-
-### 完整语义（`full`）
-
-`start` · `end` · `answer` · `if-else` · `code` · `template-transform` ·
-`variable-aggregator` · `assigner` · `list-operator` · `iteration` · `loop` ·
-`question-classifier` · `http-request` · `trigger*` · `parameter-extractor`
-
-`full` 是**默认级别**：它意味着"**没有**检测到降级原因"，而不是逐字段对照 Dify 验证过的结论
-（一条 `full` 记录可能是"实现了"，也可能只是"没有触发任何已知的降级规则"）：
+`full` 是**默认级别**：它意味着"**没有**检测到降级原因"，而不是逐字段对照 Dify 验证过的结论（一条 `full` 记录可能是"实现了"，也可能只是"没有触发任何已知的降级规则"）：
 - 节点声明了运行时未实现的字段，会自动降为 `simplified`（理由 `some declared fields were dropped`）；
 - 但没有声明、或运行时根本没扫描到的字段，不会触发降级。
 
-几个值得单独说的：
+被丢弃字段的扫描会跳过纯展示字段（`position`、`width`、`internals` 等 Canvas 元数据），也会放过"值本来就等于默认值"的模型参数（`top_p: 1`、零 penalty）。
 
-- **`iteration` / `loop`** 编译成普通 `for` / `while`，`is_parallel: true` 时用引擎的
-  `parallel` 组合子。循环次数和元素顺序是代码，不是模型。
-- **`code`** 支持 `python3` 和 `javascript`。Python 走 trampoline：注入 Dify 的
-  `main(**inputs)` 约定，执行后序列化 JSON 回传。**只在 `ctx.sandbox.confine` 里跑**，
-  拿不到沙箱就拒绝执行，绝不在无隔离的情况下跑用户代码。
-- **`template-transform`** 支持完整的两层变量语法，语义与 Dify 一致：
-  1. `{{#node.var#}}` —— Dify 的 selector 引用，由编译器**在渲染前**替换成值；
-  2. 其余部分交给 **Jinja2** 渲染（经 nunjucks），所以 `{% for %}`、`{% if %}`、
-     `{% set %}`、嵌套循环、过滤器（`upper` / `round` / `join` / `default` / `sort` /
-     `map` / `sum(attribute="x")` / `tojson` / `unique` …）都能用。
+### 8.5 `variable-aggregator` 的选择规则
 
-  只含 `{{#...#}}` 的模板仍然**零 agent 调用**、在脚本里直接拼接（快路径）；
-  含 Jinja 的模板走一次 provider 调用（nunjucks 在 JS 侧）。
+按 Dify 1.9.1 的 `VariableAggregatorNode._run` 实现：取第一路**存在**的变量（未运行的节点 = `undefined`），**只判断存在性，不看内容**。所以第一路分支真的运行了、但值为 `null` 或空串（`""`）、`0`、`[]` 时，结果就是那个 `null` / 空值——**不会**继续往后找。高级设置开启分组（`advanced_settings.group_enabled`）时按组各自选。
 
-  **模板写错了就报错**：语法错误在 `dify_native_inspect` 阶段就能看到，
-  执行时该节点直接失败并给出出错行，绝不把原始模板文本当结果返回。
-- **`variable-aggregator`** 编译成普通 JS，零 agent 调用。
+### 8.6 会话记忆与系统变量
 
-  **选择规则按 Dify 1.9.1 的 `VariableAggregatorNode._run` 实现**：取第一路**存在**的变量
-  （未运行的节点 = `undefined`），**只判断存在性，不看内容**。所以第一路分支真的运行了、
-  但值为 `null` 或空串（`""`）、`0`、`[]` 时，结果就是那个 `null` / 空值——**不会**继续往后找。
-  高级设置开启分组（`advanced_settings.group_enabled`）时按组各自选。
+Dify 的 `memory`（`TokenBufferMemory`）和 `sys.*` 直接映射到 harness 的 session log，不引入自己的会话存储。
 
-### 部分语义（`simplified`）
+**`memory`** —— `session.deriveMessages()` 的结果转成 Dify 形状，过两道滤网：(1) 只有 `source.kind === 'user'` 的消息才算用户轮次（循环注入的指令/快照/catalog 不算）；(2) 带 tool-call 的 assistant 消息是 agent 的工作过程不是回答，跳过。然后按 `memory.window.size` 裁窗口（Dify 语义：最近 N **条**消息，不是 N 对），按 `role_prefix` 渲染（默认 `Human:` / `Assistant:`）。
 
-这些节点能跑，但只实现了 Dify 的一部分语义，**而且会明确告诉你缺了什么**：
+**`sys.*`** —— 编译进脚本的 `__vars.sys`，从 `args['sys.*']` 读：`sys.conversation_id` ← 调用方 harness session 的 id；`sys.dialogue_count` ← 真实用户轮次数。刻意**不**从会话里臆造 `sys.query` / `sys.files`：一轮 run 的当前输入是调用方传的 `inputs`，不是"agent 上次说的话"。没有活会话时这些变量保持 Dify 默认值。
 
-| 节点 | 现状 | 缺口 |
-| --- | --- | --- |
-| `knowledge-retrieval` | 在本地数据集目录上做词法 grep（含 CJK bigram） | **不是向量检索**，没有 embedding |
-| `tool` | 三选一：声明式 YAML 契约（一次 HTTP 请求 + 响应映射）/ 显式 opt-in 的宿主工具 passthrough / 拒绝 | **不支持 `.difypkg` 插件**（需要 plugin daemon）；没有名字猜测表；契约格式与限制见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md) |
-| `agent` | 显式 dsh-bounded-tools 有界工具循环；旧单轮路径保留 | 原生策略插件仍 S，见 [替代策略协议](docs/agent-strategy.md) |
-| `document-extractor` | 固定官方 PDFium / python-docx / pandas+openpyxl 提取；8 格式逐字差分验证 | 需显式安装轻量依赖；旧 Office/unstructured 链仍有 S 子项，不含 OCR |
-| `datasource` / `datasource-empty` | sys 驱动文件/网站信息 + 声明式远端桥；保留显式 local/file records | 原生插件/云账户尚未验证，见 [部署协议](docs/datasource-contract.md) |
-| `human-input` | 顶层 waiting/持久恢复、提交/超时；保留显式 action 注入 | 容器内暂停/高级表单仍 S，见 [等待协议](docs/human-wait.md) |
+### 8.7 状态持久化
 
-### 占位（`placeholder`）
+conversation 变量按 `session.id + 工作流绝对路径` 保存在 `.dify-native-state`（或 `DIFY_STATE_DIR`）。写临时文件 fsync 后原子 rename；锁冲突明确失败，**绝不自动清理旧锁或重放**。成功运行提交变量，失败不提交——失败节点前已写变量与官方事务边界是否等价，仍是一个 S 子项。
 
-- `knowledge-index` —— 没有挂载向量库，什么都不写，但会出现在记录里。
-
-### 未知类型（`passthrough`）
-
-`lib/dsl.js` 的已知类型是写死的列表。列表之外的节点类型（例如 Dify 未来版本新增的类型）
-会被标记为 `node-unknown` 诊断、以 `passthrough` 级别执行——也就是说，它**不执行该节点的实际工作**，
-只是让图能继续走。支持级别在 `dify_native_inspect` 的 `support` 列表里逐节点给出。
-
----
-
-## 诊断：不静默丢东西
-
-这是这个包最重要的行为约定。
-
-运行时会按节点逐个补齐，所以一张图里**完全可能**有节点只实现了子集语义。这是允许的。
-**不允许的是把这个事实藏起来。**
-
-`lib/diagnostics.js` 把每一处「跳过了节点、丢了 DSL 字段、用了简化实现」都记成一条诊断，
-而不是抛错：
-
-```
-field-dropped          DSL 里设了值，但本运行时不读这个字段，值被忽略
-node-simplified        节点只实现了 Dify 语义的子集
-node-placeholder       节点被调度了，但不做该节点的实际工作
-node-unknown           未知节点类型，作为可见的 passthrough 执行
-template-jinja-invalid 模板写错了（Jinja2 编译失败），执行到该节点时会失败
-note                   编译器自己的结构性提示
-```
-
-诊断**从不改变行为**：带诊断的图照样执行，照样报 `succeeded`。它们只对工程师可见——
-出现在 `inspect` 输出、`run` 的逐节点记录、以及 `tracePath` 落盘的记录里。
-
-例外是 `template-jinja-invalid`：它报告的模板错误在执行时**会**让那个节点失败
-（而且是模板作者的错，不替他兜底）。之所以仍在编译期报出来，是为了让 `inspect`
-在你花掉模型调用之前就告诉你——而不是等一张图跑了一半才炸。
-
-每个节点还带一个支持级别：`full`（默认，省略）/ `simplified` / `placeholder` / `passthrough`。
-节点显式声明某个字段却没被实现，会自动降级成 `simplified`，理由写 `some declared fields were dropped`。
-
-被丢弃字段的扫描会跳过纯展示字段（`position`、`width`、`internals` 等 Canvas 元数据），
-也会放过「值本来就等于默认值」的模型参数（`top_p: 1`、零 penalty），
-免得把它们埋在真正的缺口里。
-
----
-
-## LLM 路由
-
-DSL 里的 `model.provider` / `model.name` 是一个**请求**，不是命令。
-provider 会挑一条当前 profile 真的能服务的路由，顺序如下：
-
-1. `DIFY_LLM_PROVIDER` + `DIFY_LLM_MODEL`（显式配置，且该 provider 已注册）
-2. DSL 声明的 provider（且该 provider 已注册）
-3. profile 默认模型（`agentDefaultModel.currentSelection()`）
-4. 以上都不成立时，退回 DSL 声明并标记 `dsl-unverified`
-
-每个 LLM 节点的记录都带 `meta.provider` / `meta.model` / `meta.requested` / `meta.routeSource`，
-所以「DSL 要求 deepseek，实际跑在 glm 上」这件事永远是可追溯的，不会静默压平。
-
-`ctx.llm.stream` 带来的东西：宿主的凭据边界、`dsh-llm-retry` 策略、取消信号、
-usage 统计进宿主 session。这些都不需要这个包自己实现。
-
----
-
-## 会话记忆与系统变量
-
-Dify 的 `memory`（`TokenBufferMemory`）和 `sys.*` 系统变量，直接映射到 harness 的
-session log，不引入自己的会话存储。
-
-**`memory`** —— `session.deriveMessages()` 的结果转成 Dify 的形状，过两道滤网：
-
-1. 只有 `source.kind === 'user'` 的消息才算用户轮次。循环还会追加协议注入的 user
-   消息（指令、运行时快照、catalog），那些不是用户在说话。
-2. 带 tool-call 的 assistant 消息是 agent 的工作过程，不是回答，跳过。
-
-然后按 `memory.window.size` 裁窗口（Dify 语义：最近 N **条**消息，不是 N 对），
-按 `role_prefix` 渲染（默认 `Human:` / `Assistant:`）。
-
-**`sys.*`** —— 编译进脚本的 `__vars.sys`，从 `args['sys.*']` 读：
-
-- `sys.conversation_id` ← 调用方 harness session 的 id
-- `sys.dialogue_count` ← 真实用户轮次数（用同一套滤网，和 memory 保持一致）
-
-刻意**不**从会话里臆造 `sys.query` / `sys.files`：一轮 run 的当前输入是调用方传的
-`inputs`，不是"agent 上次说的话"，猜就是错。没有活会话时（离线一次性调用）
-这些变量保持 Dify 默认值，脚本照常执行。
-
----
-
-## 安全边界
-
-- **code 节点**：`ctx.sandbox.confine` 隔离。没有沙箱就返回错误，不降级裸跑。
-- **tool 节点**：白名单先于任何解析。默认 `web_search,web_fetch`（只做精确匹配，没有通配），
-  未列出的工具在 dispatch 之前就被拒。`DIFY_TOOL_ALLOW=*` 表示全放开。
-  放行之后只有两条真正执行的路：**声明式 YAML 契约**（`DIFY_TOOLS_ROOT` 下的
-  provider/tool 契约，一次 HTTP 调用）和**显式 opt-in 的宿主工具**（`DIFY_TOOL_PASSTHROUGH`
-  里列出的确切工具名）。没有名字猜测表——`jina_reader` 不会被悄悄换成 `web_fetch`。
-  **`.difypkg` 插件形态的工具不支持**（需要 Dify plugin daemon），会明确拒绝。
-  契约格式、替换语法和限制见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md)。
-  契约会把 `tool_configurations` 当作凭据拼进请求，所以**契约文件与工作流都必须可信**。
-- **document-extractor**：本地文件路径必须解析在 workspace 或 `DIFY_DOCUMENT_ROOT` 之内，
-  越界直接拒绝；同时支持 `ctx.web.fetch` 拉远程 URL 的文本。
-- **knowledge-retrieval**：`dataset_ids` 按 `DIFY_KNOWLEDGE_ROOT` 解析成本地目录，
-  找不到就报错并列缺失的 id（不会静默返回空结果）。注意：写成绝对路径的 id 会原样使用。
-- **http-request**：纯 GET 走 `ctx.web.fetch`；其余及 `ssl_verify=false` 走沙箱 + `curl`。false 仅对单请求关闭验证；null 明确失败。
-
-### ⚠️ 已知限制：模板里的属性访问可以穿透到 JS 宿主
-
-**这是一个已登记、尚未处理的已知问题。**
-
-`template-transform` 的模板在 JS 侧由 nunjucks 渲染，而 nunjucks **不是沙箱**：
-模板里的属性访问可以沿着 JS 原型链走到宿主运行时。例如
-
-```jinja
-{{ a["constructor"]["constructor"]("return process")() }}
-```
-
-在当前 Node ESM 环境里，这样能把 `process` 对象取出来。更进一步的利用
-（`process.mainModule.require` 读文件）目前被 ESM 环境挡住——但这是**环境巧合，
-不是设计保证**。
-
-当前状态：
-
-- `lib/jinja.js` 已经拦截了 `constructor` / `__proto__` / `prototype` 等一组危险属性名
-  （挂在 nunjucks 的 `runtime.memberLookup` 上），实测上面这行会被挡住、正常属性访问不受影响；
-- 但这是一层**缓解**，不是完整的沙箱。模板仍然能调用上下文里传入的函数。
-
-因此：**只运行可信来源的工作流如 `.yml`**。不要让不可信用户提交的模板直接跑。
-真要彻底解决，需要把模板渲染放进 `ctx.sandbox` 隔离的子进程，那是另一项工作。
-
-
----
-
-## 安装
-
-作为 dsh bundle 挂进 profile。`package.json` 里声明了 patch：
-
-```jsonc
-// package.json
-"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
-```
-
-```yaml
-# cordis.patch.yml
-- insert:
-    - id: dsh-dify-native
-      name: 'dsh-dify-native'
-```
-
-然后在 profile 的 `dsh.profile.bundles` 里加上 `dsh-dify-native`。开发时用 link：
-
-```jsonc
-// ~/.dsh/profiles/<name>/package.json
-"dependencies": { "dsh-dify-native": "link:/path/to/dsh-dify-native" }
-```
-
-改代码即刻生效，不需要重新打包。
-
-### 环境变量
-
-全部可选：
-
-| 变量 | 默认 | 作用 |
-| --- | --- | --- |
-| `DIFY_LLM_PROVIDER` + `DIFY_LLM_MODEL` | — | 强制 LLM 路由，**两个都要设才生效** |
-| `DIFY_TOOL_ALLOW` | `web_search,web_fetch` | tool 节点白名单，逗号分隔，精确匹配；`*` 全放开 |
-| `DIFY_TOOLS_ROOT` | —（无契约） | 声明式工具契约的根目录，**冒号分隔**多个目录，递归扫描 `*.yaml` / `*.yml` |
-| `DIFY_TOOL_PASSTHROUGH` | —（不放开） | 允许 tool 节点按**确切名字**调用的宿主工具，逗号分隔 |
-| `DIFY_KNOWLEDGE_ROOT` | `<workspace>/knowledge` | knowledge-retrieval 的数据集根目录 |
-| `DIFY_DOCUMENT_ROOT` | `<workspace>` | document-extractor 的文件根目录 |
-| `DIFY_RUNTIME_PYTHON` | `python3` | 执行 code 节点的解释器 |
-| `DIFY_PYTHONPATH` | 自动探测 | Python 的 `PYTHONPATH` |
-| `DIFY_VENDOR_DIR` | 同 `DIFY_PYTHONPATH` | code 节点 `dependencies` 的安装目录 |
-| `DSH_DIFY_RUNTIME_ROOT` | `../dsh-dify-runtime/runtime` | 找 vendored Python 库的根 |
-
----
-
-## 测试
-
-全部离线，不需要 harness、不需要网络、不需要模型调用：
-
-```sh
-cd dsh-dify-native
-./tests/run-all.sh        # → ALL TESTS OK
-```
-
-这是**单元 / 集成层的离线测试**，证明的是运行时自身的翻译与分派逻辑符合实现意图。
-总入口也执行已安装 dsh 的真实工作流引擎测试，LLM 使用固定回复。它不证明与 Dify 官方执行器逐字段一致，
-最终能力证据以 [`docs/capability-report.md`](docs/capability-report.md) 为准。
-
-`run-all.sh` 当前跑 18 个文件，覆盖：
-
-| 文件 | 覆盖 |
-| --- | --- |
-| `dsl.test.mjs` | 解析、IR、编译、拒绝不合法的图 |
-| `nodes.test.mjs` | 节点执行语义 |
-| `nodes-new.test.mjs` | 后补节点（agent / datasource / document / list-operator / trigger …） |
-| `control-semantics.test.mjs` | 控制流语义（分支、守卫、容器） |
-| `coverage.test.mjs` | 30 个 `BlockEnum` 类型解析到已知 kind；`../dsl/*.yml` 样本零未知类型、全部可编译 |
-| `diagnostics.test.mjs` | 诊断只在真缺口时出现，且从不升级成编译错误 |
-| `template-jinja.test.mjs` | 模板替换与 Jinja2 渲染 |
-| `session-memory.test.mjs` | 记忆滤网、窗口、role_prefix |
-| `sys-vars.test.mjs` | 系统变量来自 args，无会话时保持默认 |
-| `code-file-input.test.mjs` | code 节点的文件输入 |
-| `provider.test.mjs` | classifier / http-request / tool 白名单 / knowledge-retrieval |
-| `tool-contracts.test.mjs` | 声明式工具契约：加载、占位符、空值省略、响应映射、失败路径 |
-| `tool-node.test.mjs` | tool 节点分派：契约 → `.difypkg` 拒绝 → passthrough → 拒绝 |
-| `structured-output.test.mjs` | structured_output 的 ajv 校验 + 一次修复回合 |
-| `translation-script.test.mjs` | 分支编译成普通 `if`，两条路径都正确 |
-| `container-scope.test.mjs` | 容器作用域及嵌套回归 |
-| `engine-e2e.test.mjs` / `engine-nested.test.mjs` | 真实 dsh 引擎的样本矩阵、分支、失败和嵌套容器 |
-
-测试覆盖的是**已验证的范围**：`coverage.test.mjs` 扫描的 `../dsl/*.yml` 样本、以及各测试里构造的
-图。它们不能推出"任意 Dify 工作流都可运行"。
-
-`coverage.test.mjs` 对样本只断言两件事：零未知类型、零解析/调度 issue、能编译成脚本。
-它**不**要求所有节点都是 `full` 级别——实际用 `dify_native_inspect` 的 `support` 列表逐节点看，
-当前 18 个样本里就有若干节点是 `simplified`（如 `agent`、`datasource`、`document-extractor`、
-`list-operator`、`knowledge-retrieval`，以及声明了被丢弃字段的 `llm`）。
-`full` 是"没有检测到降级原因"的默认值，不是"Dify 全语义已被验证"的结论。
-
----
-
-## 目录
+### 8.8 文件职责
 
 | 文件 | 职责 | 行数 |
 | --- | --- | --- |
-| `lib/dsl.js` | 解析 Dify DSL → IR → 编译编排脚本。校验图结构、拓扑排序、分支守卫。 | ~1880 |
-| `lib/provider.js` | `dify-node` provider：按 kind 分派节点，每个节点一个 capability 实现；tool 节点分派根。 | ~1800 |
-| `lib/index.js` | Cordis 插件：注册 provider + 四个工具，渲染 inspect/run 输出。 | ~510 |
+| `lib/dsl.js` | 解析 Dify DSL → IR → 编译编排脚本。校验图结构、拓扑排序、分支守卫。 | ~1940 |
+| `lib/provider.js` | `dify-node` provider：按 kind 分派节点，每个节点一个 capability 实现；tool 节点分派根。 | ~1810 |
+| `lib/index.js` | Cordis 插件：注册 provider + 六个工具，渲染 inspect/run 输出。 | ~570 |
 | `lib/tool-contracts.js` | 声明式工具契约：加载 YAML、替换三种占位符、一次 HTTP 调用、响应映射。 | ~330 |
 | `lib/jinja.js` | `template-transform` 的 Jinja2 渲染（nunjucks + 过滤器补齐 + 属性访问防护）。 | ~235 |
 | `lib/session-history.js` | Dify memory ↔ harness session log 的适配层。 | ~130 |
 | `lib/diagnostics.js` | 诊断收集器 + 字段丢弃扫描。无依赖、无副作用。 | ~135 |
-
-文档：[`docs/dify-tool-contract.md`](docs/dify-tool-contract.md)（工具契约格式与限制）、
-[`docs/control-semantics.md`](docs/control-semantics.md)（控制流语义）。
+| `lib/runtime-state.js` / `lib/event-runtime.js` | 持久状态、事件桥运行时 | 小文件 |
+| `lib/*.py` | 固定官方提取函数、cron 槽计算、调度解析 | — |
 
 `dsl.js` 和 `provider.js` 都是纯翻译层 / 能力层——它们不调度、不隔离、不连模型。
 
----
+### 8.9 测试清单（`run-all.sh` 共 33 个入口）
 
-## 边界
+| 文件 | 覆盖 |
+| --- | --- |
+| `dsl.test.mjs` | 解析、IR、编译、拒绝不合法的图 |
+| `nodes.test.mjs` / `nodes-new.test.mjs` | 节点执行语义 / 后补节点 |
+| `control-semantics.test.mjs` | 控制流语义（分支、守卫、容器） |
+| `coverage.test.mjs` | 30 个 `BlockEnum` 类型解析到已知 kind；`../dsl/*.yml` 样本零未知类型、全部可编译 |
+| `diagnostics.test.mjs` | 诊断只在真缺口时出现，且从不升级成编译错误 |
+| `template-jinja.test.mjs` | 模板替换与 Jinja2 渲染 |
+| `session-memory.test.mjs` / `sys-vars.test.mjs` | 记忆滤网/窗口/role_prefix；系统变量 |
+| `code-file-input.test.mjs` | code 节点的文件输入 |
+| `provider.test.mjs` | classifier / http-request / tool 白名单 / knowledge-retrieval |
+| `tool-contracts.test.mjs` / `tool-node.test.mjs` | 声明式契约；tool 节点分派（契约 → `.difypkg` 拒绝 → passthrough → 拒绝） |
+| `structured-output.test.mjs` | structured_output 的 ajv 校验 + 一次修复回合 |
+| `translation-script.test.mjs` / `container-scope.test.mjs` | 分支编译成普通 `if`；容器作用域及嵌套回归 |
+| `engine-e2e.test.mjs` / `engine-nested.test.mjs` | 真实 dsh 引擎的 18 样本矩阵、分支、失败和嵌套容器 |
+| `engine-extraction.test.mjs` / `engine-extraction-differential.test.mjs` / `engine-extraction-routing.test.mjs` | 数组/长文本/远程 bytes/失败；8 格式与官方函数逐字差分；49 扩展 + 8 MIME 路由 |
+| `engine-datasource.test.mjs` / `engine-agent-loop.test.mjs` / `engine-conversation.test.mjs` | sys 与形状；有界工具循环；跨 run 状态与会话隔离 |
+| `engine-events.test.mjs` / `engine-schedule.test.mjs` / `engine-schedule-visual.test.mjs` | 真实 listener/鉴权/去重/HMAC 桥；cron 时区/补偿；四种 visual 频率 |
+| `engine-human-wait.test.mjs` / `engine-human-form.test.mjs` | 等待→重开→提交→分支、不重放；动态表单与默认值 |
+| `engine-http-follow.test.mjs` / `engine-http-tls.test.mjs` / `engine-http-timeout.test.mjs` | 后继节点；ssl_verify 四态；timeout 键被消费 |
+| `package-deployment.test.mjs` | 临时 `npm pack` + 独立 `npm install`；`CLEAN PACKAGE IMPORT OK` |
 
-- **人工等待有限**。顶层 human-input 真实等待并持久化快照，恢复跳过已完成副作用；容器内暂停/高级表单仍 S。
-- **没有向量检索**。`knowledge-retrieval` 是词法匹配，`knowledge-index` 是空操作。
-- **触发协议有限**。`trigger*` 支持参数注入、声明式 listener 和 cron；原生插件订阅未实现，见 [事件部署](docs/event-deployment.md)。
-- **文档格式有限**。PDF/DOCX/XLSX 与多种文本格式按固定官方函数提取；旧格式/unstructured 完整链仍 S，未承诺 OCR。
-- **会话持久化有限**。conversation 按 session/workflow 保存；失败与崩溃的逐节点事务边界尚未证明官方等价。`answer` 继续累积到 `answers`。
-- **Jinja2 不是 100% 兼容**。渲染器是 nunjucks（Jinja2 的 JS 移植），少数边角行为
-  与 Python Jinja2 有差异。缺失的常用过滤器（`map` / `tojson` / `items` / `unique`）
-  已在 `lib/jinja.js` 里补上；`sum(attribute="x")` 的关键字参数形式也重写过了——
-  原版 nunjucks 对这种写法**静默返回 `NaN`**，那正是本运行时拒绝产生的那种错误。
-  模板用了 nunjucks 也不认识的构造时，节点会失败并说明原因，而不是输出错的文本。
-- **模板里的属性访问未完全沙箱化**。见上面「安全边界」里的已知限制。
-- **工具只覆盖"一次 HTTP 请求 + 取字段"**。`.difypkg` 插件不支持；需要签名、OAuth、多步调用的工具
-  无法用契约表达。契约没有参数类型转换、没有 schema 校验，JSON body 只有一层映射。
-  详见 [docs/dify-tool-contract.md](docs/dify-tool-contract.md)。
-- **解析层只认写死的类型列表**。Dify 未来新增的节点类型按未知类型处理（可见诊断 + 不执行实际工作），
-  不会自动获得实现。
-- **`full` 不是"已对 Dify 验证"的同义词**。它是"没有检测到降级原因"的默认级别；
-  与真实 dsh 引擎的执行证据以 [`docs/capability-report.md`](docs/capability-report.md) 为准。
+测试覆盖的是**已验证的范围**：`coverage.test.mjs` 扫描的 `../dsl/*.yml` 样本、以及各测试里构造的图。它们不能推出"任意 Dify 工作流都可运行"。`coverage.test.mjs` 对样本只断言两件事：零未知类型、零解析/调度 issue、能编译成脚本——它**不**要求所有节点都是 `full`。
 
-提取依赖安装：`./scripts/install-extraction.sh`（Python 由 `DIFY_RUNTIME_PYTHON` 选择）。
-依赖固定在 `requirements-extraction.txt`，默认安装到插件新建 `.vendor-extraction`，已存在则拒绝覆盖。
-也可设置 `DIFY_EXTRACTION_VENDOR` 指向新的安装目录；正常提取自动把该目录及 `DIFY_PYTHONPATH` 加入搜索路径。
-运行时不隐式安装，缺库给出可操作错误。未安装重量级 unstructured，旧格式转换仍列 S。文档分派完整复用固定官方路由：扩展名优先，缺扩展才读 MIME；`.vtt` 保持原文，MIME-only text/vtt 才转换。
+### 8.10 其他协议文档
 
-conversation 变量按会话 ID 与工作流绝对路径保存在工作区 `.dify-native-state`（可设 DIFY_STATE_DIR），成功 run 提交；不同会话隔离。并发/遗留锁明确失败，不自动重放；失败 run 的逐节点事务边界尚未证明官方等价。
+- [docs/capability-report.md](docs/capability-report.md) —— 当前执行能力与语义余项
+- [docs/semantic-gaps.md](docs/semantic-gaps.md) —— 23 项 S 子项逐条验收条件
+- [docs/reachability-audit.md](docs/reachability-audit.md) —— 原始可达性审计与历史证据
+- [docs/deployment.md](docs/deployment.md) —— npm ci/pack 与 Python 依赖安装
+- [docs/dify-tool-contract.md](docs/dify-tool-contract.md) —— 工具契约格式与限制
+- [docs/control-semantics.md](docs/control-semantics.md) —— 控制流语义
+- [docs/datasource-contract.md](docs/datasource-contract.md) / [docs/agent-strategy.md](docs/agent-strategy.md) / [docs/event-deployment.md](docs/event-deployment.md) / [docs/human-wait.md](docs/human-wait.md)
 
-定时入口使用显式五字段 cron + IANA timezone，安装 `./scripts/install-events.sh`，配置与去重/重启边界见 [事件部署](docs/event-deployment.md)。visual_config 的 hourly/daily/weekly/monthly（含 last）复用固定新版转换函数，另有真实引擎回归。
+官方基线：[cd47a47c](https://github.com/langgenius/dify/tree/cd47a47c3b4acc4d4457b73777722602c33bc950)（文档提取 / datasource / agent / HTTP），trigger* / human-input 另固定 [5dff2467](https://github.com/langgenius/dify/tree/5dff24671d7eb0db087a01b699444d2f1939f17e)。普通 `trigger`、`datasource-empty` 是本地扩展/别名，没有伪造官方独立节点。
+
+</details>

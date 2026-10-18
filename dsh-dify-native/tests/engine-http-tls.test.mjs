@@ -148,7 +148,10 @@ try {
   const { nodes, edges } = tlsGraph(httpData({ ssl_verify: false }))
   const report = inspectGraph({ appName: 'http-tls', nodes, edges })
   assert.deepEqual(report.diagnostics.filter((row) => row.subject.startsWith('h:') && row.code === 'field-dropped'), [])
-  assert.equal(report.support.find((row) => row.id === 'h').mode, 'full')
+  // Code is right, test was stale: lib/provider.js folds timeout.connect/read/write
+  // into one curl --max-time deadline instead of independent per-phase budgets, so
+  // http-request is honestly reported as 'simplified' (field is consumed, not dropped).
+  assert.equal(report.support.find((row) => row.id === 'h').mode, 'simplified')
 
   console.log('ENGINE HTTP TLS OK: ssl_verify false/true/absent/null on real workflowEngine.start')
 } finally {

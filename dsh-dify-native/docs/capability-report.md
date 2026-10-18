@@ -1,121 +1,62 @@
-# 真实执行能力报告
+# 当前执行能力与语义余项
 
-验证日期：2026-10-18。入口：`node tests/engine-e2e.test.mjs`，也已纳入 `./tests/run-all.sh`。
+**限定协议下可以用，整体语义收尾尚未全部完成。非 RAG 仍有 23 个离散 S 子项：17 项可继续本地开发/依赖配置，6 项须有指定真实插件、账户或 Dify 部署资料验收。** 原审计 7 个非暂停组（9 个节点名）仍含 21 项，另有 conversation、HTTP 阶段 timeout 各 1 项；[逐项清单与验收条件](semantic-gaps.md) 是计数依据。RAG 的 #2 knowledge-retrieval / #3 knowledge-index 两组、两个节点名按用户要求暂停，未混入 23 项。
 
-## 已经证明的范围
+本轮修复了真实输出/可达性问题：文档数组拼接、静默截断与文件失败仍成功；PDF/Office/格式路由差距；datasource 猜路径及 JSONL 吞错；agent 不执行工具；普通 HTTP 成功后跳过下游；官方 timeout 键被忽略；conversation 每次 run 重置；human 默认自动首选且不能等待；事件无 listener/调度。另复现并修复干净 npm 包缺文件、缺 yaml/ajv 依赖。修复有分批提交和真实失败回归，未改交接前测试断言，未合并 main、未推远端。
 
-**18/18 个样本真实进入工作流引擎并断言最终 outputs，25 次原样本运行。** 另有登录状态分支、未声明工具、code 异常、human-input 两个动作、knowledge-index、嵌套 iteration 的真实引擎运行，以及必填输入拒绝测试。共 33 次真实引擎运行（含独立嵌套容器回归两次）；缺输入用例另计，在启动前拒绝。没有 skip，也没有把执行失败当成功断言。
+最终全量验证：**待本轮代码完成后的最后复跑记录**。早前全量绿不替代最后验证。基线 18/18 样本、25 次样本运行的原始矩阵已封存在 [b6f3436 历史报告](capability-report.baseline-b6f3436.md)，其中“无 listener/单轮/预置 conversation”等是当时状态，不是当前能力表。
 
-测试使用 PATH 中已安装的 dsh（本机 0.2.0-rc.2），在 Cordis 中装载与 profile 相同发行版的 `dsh-workflow-ptc`、Node PTC runtime、SubagentRuntime、LocalSandboxProvider、session、tools 和真实 grep 服务，再加载本插件。运行链：
+## 当前范围（按审计分组）
 
-`dify_native_run.execute → ctx.workflowEngine.start → PTC 独立 Node 进程 → ctx.subagents.start → dify-node → sandbox / tools / 文件 / LLM → 最终 outputs`
+| 组 | 节点名 | 已实现且真实验证 | 未完成 S 子项数 |
+| --- | --- | --- | --- |
+| #1 | document-extractor | 固定官方 PDFium 4.30.0 / python-docx / pandas+openpyxl；合法文件逐字差分；完整扩展名/MIME 路由；数组、远端 bytes、任一失败即失败 | 7（EX1–EX7） |
+| #4 | datasource / datasource-empty | sys.datasource_type/info 真注入；File/网站输出；独立声明式 HTTP 适配；显式 local/file records 保留 | 2（DS1–DS2） |
+| #5 | agent | 显式 dsh-bounded-tools 有界工具循环、工具白名单/schema、结果回灌、重复 id/上限/取消；token usage、json[]、files[] 形状 | 4（AG1–AG4） |
+| #6 | trigger / trigger-webhook | 声明式实际 HTTP listener → runner → 引擎；载荷/header/query 映射、鉴权、状态码、持久去重、sys.* 输出 | 2（WH1–WH2） |
+| #7 | trigger-schedule | croniter cron/IANA 时区；固定新版 visual 四种频率/last 转换；真实槽时间、去重、重启补偿 | 1（SC1） |
+| #8 | human-input | 顶层 waiting/checkpoint、动态表单/默认变量、显式提交/到期恢复；重开与重送不重放上游；保留显式 action 注入 | 4（HU1–HU4） |
+| #9 | trigger-plugin | 明确 bridge:true 的 HMAC 签名 HTTP 桥、显式参数映射、订阅能力诊断；不执行原生订阅 | 1（TP1） |
+| 审计外 | conversation / http-request | 同会话同工作流跨 run 状态与会话隔离；TLS false/true/缺省/null；普通 HTTP 后继与官方 timeout 键 | 2（CV1、HT1） |
 
-只有 LLM 使用固定回复流，不访问模型 API。Python/JavaScript code 节点运行真实子进程，基线断言 sandbox 后端存在。本机后端是 `landlock-run`，报告 `partial` enforcement（旧 Landlock ABI），不能据此声称完整隔离。
+上述为有限实现，inspect 对 agent/文档/datasource/human/trigger* 保留 simplified；HTTP 分阶段 timeout 配置也报告简化。full 只表示特定已实现字段范围，没有“Dify 全兼容”的含义。未知节点仍可见 passthrough；不计成业务能力。RAG 原有词法/placeholder 测试继续保留，本轮不扩展其算法。
 
-**工具服务的边界必须单列：** `lang-consistency.yml` 使用测试部署声明的 `jina/jina_reader` YAML 契约和本地 HTTP 服务；URL 参数、真实 HTTP、JSON 响应映射、Python 解析、三个语言选择及最终输出都被验证。没有替换引擎、provider、HTTP fetch 或契约执行器，但这个本地端点是测试数据源，**不能算作外部 Jina 服务可用的证明**。使用现有 `../tools/jina.yaml` 请求公网 Jina 的实测失败：节点 `17310793844280` 返回 `request failed: fetch failed`，另一次 curl 探测 20 秒超时。因此“18 个样本在任意原部署环境都可直接跑通”没有被证明；公网 Jina 这一路目前跑不通。
+## 官方依据与部署
 
-## 样本矩阵
+基线为 [cd47a47c3b4acc4d4457b73777722602c33bc950](https://github.com/langgenius/dify/tree/cd47a47c3b4acc4d4457b73777722602c33bc950)：
 
-“跑通”均表示检查了实际 outputs，不代表完整 Dify 产品语义或真实模型生成质量。
+- `api/core/workflow/nodes/document_extractor/node.py`：`DocumentExtractorNode._run`、`_extract_text_from_file`、两个完整路由及各纯提取函数。扩展名优先，缺扩展才看 MIME；`.vtt` 为原文，MIME-only text/vtt 才转换。未知/缺转换链明确失败，不用缩减表猜 MIME。49 个官方纯文本扩展及 8 个 MIME-only 格式已参数化验证。
+- `api/core/workflow/nodes/datasource/datasource_node.py`：`_run`、`_transform_message`、`_transform_datasource_file_message`，以及 `api/core/workflow/nodes/agent/agent_node.py` 的 `_run` / `_transform_message` 和 `api/factories/agent_factory.py:get_plugin_agent_strategy`。
+- `api/core/workflow/nodes/http_request/entities.py:HttpRequestNodeTimeout` 与 `api/core/helper/ssrf_proxy.py:make_request/_get_ssrf_client`。start.config 在固定基线不存在，不凭名称赋予语义。
 
-| 样本 | 真实引擎结果 | 已断言的值 / 分支 / 限制 |
-| --- | --- | --- |
-| form-demo.yml | 跑通 | 登录失败返回完整 HTML 表单；成功返回“登录成功，我们聊点什么？”；额外预置 DSL conversation 默认 token 后走聊天分支，返回 `welcome back` |
-| intent-reply.yml | 跑通 | 两个 classifier 类别均执行；最终 output 分别带对应类别标记；使用帮助分支实际 grep 本地知识文件并断言检索内容 |
-| jieba.yml | 跑通 | `你好世界` → answer `['你好', '世界']`；样本指定 paddle 模式，但当前 jieba 环境未证明使用了 Paddle 神经分词 |
-| json-repair.yml | 跑通（基线） | `{name: "Ada",}` → output 可解析为 `{"name":"Ada"}`；真实 sandbox Python 进程 |
-| lang-consistency.yml | 配置本地契约端点后跑通；公网 Jina 跑不通 | 三种基准语言分别执行；每次真实发出三个 HTTP 请求；检查基准内容和 cn/en/jp 最终 outputs；公网失败见上文 |
-| mature-ticket-triage.yml | 跑通 | high / normal 均执行，检查另一分支未运行；完整 reply、advice、keywords；顺序 iteration 输出两个关键词 |
-| nodes-agent.yml | 跑通（simplified） | answer `研究完成`；实际经过单次 LLM 调用，toolsExecuted 为空 |
-| nodes-code-languages.yml | 跑通 | n=5 → JavaScript 加倍 → Python 加一 → result=11 |
-| nodes-datasource.yml | 跑通（simplified） | 读取真实 records.jsonl，两条记录；最终模板包含第一条 Ada 记录 |
-| nodes-document-extractor.yml | 跑通（simplified） | 读取真实 doc.txt，最终 text 与完整文件内容相等，failed=0 |
-| nodes-iteration.yml | 跑通 | 真实 parallel 三项按序输出 `第0项: a` 等；空数组 → result=[]，未启动子 agent |
-| nodes-list-operator.yml | 跑通（有字段诊断） | 四条记录过滤、排序、截取后输出 score 8、3，count=2 |
-| nodes-loop.yml | 跑通 | rounds=3 → round-0 / round-1 / round-2 三个输出对象 |
-| nodes-trigger.yml | 跑通（事件注入） | topic=deploy → `触发主题: deploy`；没有启动 webhook HTTP 监听服务 |
-| python-coding.yml | 跑通 | LLM 固定流 → 最终 answer `print("hello")`；这是回答代码的工作流，不会执行生成的 Python |
-| seo-slug.yml | 跑通 | 检查 title 被注入实际 LLM 请求；固定流 → output `hello-world` |
-| translation.yml | 跑通 | country 为空 / Canada 均执行；检查实际分支及未执行分支；建议传入最后一次模型请求，最终 outputs 分别为对应标记 |
-| nodes-parameter-extractor.yml | 跑通 | 真实 provider 解析固定模型 JSON，最终 name=张三、city=北京、success=1 |
+该基线没有 trigger* / human-input。新增节点另固定 [5dff24671d7eb0db087a01b699444d2f1939f17e](https://github.com/langgenius/dify/tree/5dff24671d7eb0db087a01b699444d2f1939f17e)，具体路径/函数见 [事件部署](event-deployment.md) 与 [人工等待](human-wait.md)。普通 trigger、datasource-empty 是本地扩展/别名，没有伪造官方独立节点。
 
-form-demo 的聊天分支使用解析后 DSL 中预置的 conversation 默认值，其他节点/边不变，仍由真实引擎运行。历史运行使用预置状态；现在另有跨 run 回归：同会话同工作流持久变量从 1 递增到 2，其他会话独立从 1 开始。 原样本两次登录测试与这次预置状态测试分开计数。
+[部署说明](deployment.md) 给出 npm ci/pack、直接声明的 nunjucks/yaml/ajv、Python 固定依赖与新目录安装步骤；不覆盖原 vendor/config。支持 `DIFY_RUNTIME_PYTHON`、`DIFY_PYTHONPATH`、`DIFY_EXTRACTION_VENDOR`、`DIFY_EVENTS_VENDOR`。缺库明确给安装方法，运行时不隐式安装。未装 unstructured。提取子进程输出超过 4 MiB 明确失败，不静默截断；不承诺 OCR。
 
-## 节点支持级别
+其他协议：[datasource](datasource-contract.md)、[agent 替代策略](agent-strategy.md)、[工具契约](dify-tool-contract.md)、[控制流](control-semantics.md)。本地 HTTP fixture 证明协议/实际 I/O，不能代替真实云账户、Jina 或原生插件验收。
 
-这些级别是当前承诺的实现范围，full 不是“兼容 Dify 全部字段”。`inspectGraph().support` 和节点 warnings 还会根据具体 DSL 的丢弃字段将单个节点降为 simplified。
+## 验证文件与关键证据
 
-| 级别 | 类型 | 当前语义 / 证明范围 |
-| --- | --- | --- |
-| full（所支持字段范围内） | start、end、answer、code、if-else、question-classifier、template-transform、assigner / variable-assigner、variable-aggregator、parameter-extractor、iteration、iteration-start/end、loop、loop-start/end | 本次真实链路覆盖输入、输出、条件分支、代码、聚合、模板、提取及容器执行；未覆盖所有字段组合 |
-| full（有限部署协议） | llm、tool、http-request、list-operator | LLM 文本流；tool 执行部署声明契约或显式允许的 harness 工具；HTTP/列表仅限实现支持的选项。本次覆盖 tool 契约 HTTP，未用独立 http-request 节点证明所有 HTTP 模式 |
-| 有限扩展协议 | trigger、trigger-webhook、trigger-plugin | 声明式 listener → 真实引擎，鉴权/映射/持久去重；plugin 仅签名桥，原生订阅仍 S。schedule 修复另列 |
-| simplified | knowledge-retrieval | 真实 grep 本地目录 + 词法排序，非 embedding 检索；使用帮助分支实际执行并检查返回记录 |
-| 有限替代策略 | agent | 显式 dsh-bounded-tools 有界工具循环、白名单/schema/取消/usage；旧单轮兼容路径保留；原生插件策略仍 S |
-| 固定提取函数（有限格式） | document-extractor | PDFium 4.30.0、python-docx、pandas/openpyxl；8 种格式与官方纯函数逐字差分，数组/远程字节/失败已验；旧格式仍有 S 子项 |
-| 有限部署协议 | datasource / datasource-empty | sys 驱动 file/website 输出；声明式远端变量适配，插件参数不猜路径；records 扩展保留，原生插件仍 S |
-| 有限等待协议 | human-input | 顶层持久 waiting/提交/超时恢复；重开与副作用不重放已验，显式 action 注入保留；容器内/高级表单仍 S |
-| placeholder | knowledge-index | 实际被调度，但不写向量库；额外用例断言最终 status=not_written、indexed=0 |
-| passthrough / 非能力实现 | 未知 generic、custom-note | 未知类型仅透传并告警，note 是标注；不能视为业务节点能力 |
+新能力均经 `tests/helpers/real-harness.mjs` 装载已安装 dsh，实际 `workflowEngine.start → PTC 子进程 → dify-node → sandbox/HTTP/tools/Python → outputs`。只允许 LLM 固定回复，没有 mock 引擎。打包测试只验证独立安装/import/helper，核心 E2E 仍用真实引擎。
 
-本组样本的某些 llm（例如 vision 配置）及 list-operator 带 field-dropped 诊断，测试保留这些诊断，不能把文本路径成功解释成图像理解或所有配置项已生效。
+| 测试文件（tests/ 下） | 关键断言 / 输出 |
+| --- | --- |
+| engine-extraction.test.mjs | 数组含空元素、完整 2,010,000 字符、合法 PDF/Office、远程 PDF bytes、404/二进制/混合文件失败 |
+| engine-extraction-differential.test.mjs | AST 从固定官方源码同时加载真实路由和纯函数，8 格式输出逐字相等；合法 DOCX 混合段落表格、XLSX 多 sheet/数字/空行/换行/公式缓存 |
+| engine-extraction-routing.test.mjs | `49 official plain extensions + 8 MIME routes`；.vtt 原文、MIME-only 转换、远端无扩展 MIME、扩展优先、混合失败 |
+| engine-datasource.test.mjs | sys 注入、file/website 形状、实际远端契约请求、插件路径拒绝、损坏 JSONL 失败 |
+| engine-agent-loop.test.mjs | 实际 HTTP 工具一次，第二轮模型看到结果；usage.total_tokens=10；未声明/schema/duplicate/limit/cancel 失败 |
+| engine-conversation.test.mjs | 同会话第二次 n=2，不同会话 n=1，修复前第二次仍 n=1 |
+| engine-events.test.mjs | 真实 listener、header/query/body 输出、鉴权401、重送 duplicate、HMAC 插件桥、sys.* 与 simplified 诊断 |
+| engine-schedule.test.mjs / engine-schedule-visual.test.mjs | 上海09:00=UTC01:00、重启补偿/去重；hourly/daily/weekly/monthly-last 四模式真实输出 |
+| engine-human-wait.test.mjs / engine-human-form.test.mjs | waiting→重开→提交→正确分支；重复/误新 run 不重放，上游 HTTP 只一次；动态表单及变量默认值逐字相等；到期分支 |
+| engine-http-follow.test.mjs | 修复前输出 null，修复后普通 HTTP 响应实际进入下游 |
+| engine-http-tls.test.mjs / engine-http-timeout.test.mjs | 自签证书 false 成功，true/缺省失败，null 明确错；connect/read/write=1 后真实延迟端点走 timeout 分支 |
+| package-deployment.test.mjs | 临时 npm pack/独立 npm install；`CLEAN PACKAGE IMPORT OK`；打包文件齐全，PDF/cron helper 用显式依赖路径可用 |
+| engine-e2e.test.mjs / engine-nested.test.mjs | 保留原 18/18 样本输出、既有错误/支持分支、显式/推断嵌套容器；没有削弱旧断言 |
 
-## 正确失败与真实路径发现
+02d4101 的手写 OOXML/fitz 和早期只调用 VTT 纯函数的预期已纠正：af8c38f 使用成熟库，fd0a86e 使用完整官方节点路由。旧审计关于需修改旧断言的建议未采纳；旧测试实际未发现这类冲突。仅收尾新增 extraction 测试修正非法 ZIP fixture 和 VTT 错误预期，交接前测试断言未变。TLS 4651731 已复核并真实复跑。
 
-- 未声明 `missing/undeclared`：在工具 allowlist 已允许此名称时，仍经真实引擎失败，错误包含节点 `bad-tool`、完整工具名和 `not declared`，不会误用别的工具。
-- 所有条件不满足：translation 的 country 非空、triage 的 priority=normal 均进入 false 分支，完成并得到预期值。
-- 空 iteration：输出空数组，不报错、不启动 body 子 agent。
-- code 主动抛 ValueError：`dify_native_run` 返回 status=failed、空 outputs，错误包含节点 `1732007419308` 和 `intentional e2e failure`。
-- 缺必填 llm_string：run 工具返回 status=rejected，明确指出 `missing start inputs: llm_string`；按照入口协议在引擎启动前拒绝。
+复现 `./tests/run-all.sh`（33 个测试入口）。需已装 dsh/可用 sandbox、Node/Python、既有样本依赖，以及提取/cron 的显式依赖；package-deployment 需要 npm registry 网络。任何缺失/失败均退出失败，不 skip、不吞错。测试采用本地回环服务，无付费模型请求。
 
-本次未发现 agent 签名、parallel 组合子、args 注入或 subagent provider 协议不匹配。另发现真实问题：嵌套 iteration 未被正确编译。内层容器缺少 parentId、但由外层 body 边连接时，被误判成顶层不可达节点；补齐归属后，又暴露 body emitter 把嵌套 iteration 当普通节点处理，报 `internal: no emitter for node inner (iteration)`。已修复：只对归属明确且无环的内层容器推断 owner，并递归编译容器 body。新增真实引擎回归检查两层输出 `[["a!","b!"],["c!","d!"]]`，原有 container-scope 测试不改断言并纳入总入口。修复以独立 commit `5c820c8` 提交（含真实引擎回归）。
-
-实测还暴露外部 Jina 不可达、conversation 状态需预置、若干节点只有简化语义；这些限制不能由测试全绿抹去。
-
-## 复现
-
-前提：安装含上述服务的 dsh（本次版本 0.2.0-rc.2），可用的本地 sandbox 后端、Node、Python3、ripgrep，以及 Python 可导入 json_repair、requests、jieba。本机 Python 库位于 `../dsh-dify-runtime/runtime/vendor`。缺少引擎、依赖或样本会直接报错，不会跳过。测试不自动安装依赖。
-
-```bash
-cd dsh-dify-native
-node tests/engine-e2e.test.mjs
-# ENGINE E2E OK: 18/18 samples, 25 sample runs + negative/support cases
-
-# 可选：保存每次样本运行的 outputs、已执行节点及支持级别
-DIFY_E2E_EVIDENCE=/tmp/dify-e2e-evidence.json node tests/engine-e2e.test.mjs
-
-./tests/run-all.sh
-# ALL TESTS OK
-```
-
-默认从 PATH 的 dsh 可执行文件定位发行版，也可设置 `DSH_ENTRY=/absolute/path/to/dsh/lib/bin.js`。`DIFY_PYTHONPATH` / `DIFY_RUNTIME_PYTHON` 可指定已有 Python 环境。运行约需十几秒至几十秒；只使用回环 HTTP，不依赖公网模型或 Jina 的稳定性。
-
-## 尚未完成
-
-- datasource 的真实 Dify 插件、认证云账户和远端文件生命周期仍为 S 子项；已证明 sys 本地文件/网站信息与声明式 HTTP 适配，见 [部署协议](datasource-contract.md)。
-- `http-request.ssl_verify` 已在 4651731 修复并真实验证；`start.config` 固定官方版本无此字段，不赋予猜测语义。
-- conversation 已补同会话/工作流本地持久化与会话隔离；失败运行不提交状态（与官方逐节点持久化的完整等价仍需验证）。公网 Jina 部署仍需处理。
-- file 输入的“multiple values for keyword argument”未复现；新增测试证明 dict 原样传入，未宣称修复该未复现错误。
-- RAG 扩展按用户要求暂停。尚未合并 main 或推送远端。
-
-## Extraction 修正与验证（2026-10-18）
-
-02d4101 最初的 stdlib OOXML 方案有实际语义偏差，已撤换。现在复用固定 cd47a47 的 `document_extractor/node.py` 纯提取函数，PDF 使用官方精确版本 pypdfium2==4.30.0，DOCX 使用 python-docx，Excel 使用 pandas/openpyxl，包括公式缓存读取，不自行计算公式。DOCX 表头 `---`、单元格 `<br>`、JSON/YAML/CSV/properties 转换均按官方函数；完整复用固定官方扩展名/MIME 路由：扩展名优先；`.vtt` 保持原文，只有无扩展且 MIME=text/vtt 才走转换。PDF/合法 DOCX/多 sheet XLSX/CSV/JSON/YAML/VTT/properties 由 AST 同时加载固定官方路由及纯提取函数计算预期值，真实 workflowEngine.start 输出逐字相等。原数组、长文本、远程 PDF、404/文件/二进制失败断言保留。旧测试仅将非法 ZIP fixture 改为成熟库生成合法文件，未改断言。
-
-部署：运行 `./scripts/install-extraction.sh`；依赖装入插件新目录 `.vendor-extraction`，已存在即拒绝覆盖。指定 `DIFY_RUNTIME_PYTHON` 选择 Python，`DIFY_EXTRACTION_VENDOR` 选择新目录，或用 `DIFY_PYTHONPATH` 指向已配依赖。`requirements-extraction.txt` 固定依赖，运行时不隐式安装。缺库明确报安装方法。没有安装 unstructured。旧 DOC/PPT/PPTX/EPUB/EML/MSG 完整官方转换链仍为 S 子项；XLS 还需 xlrd 等按格式配置，未验证。OCR 不承诺。每文件输出上限仍为 4 MiB 子进程传输限制，超限明确失败，不静默截断。
-
-TLS 4651731 已复核且真实引擎测试通过：false 单请求 curl --insecure，true/缺省校验证书，null 明确失败。
-
-#4 datasource / datasource-empty 基础项修复：真实引擎先复现 sys 被忽略而把 datasource_name 当文件路径，再通过 file/website/remote-contract/拒绝猜路径断言。另先复现损坏 JSONL 被吞错，再修复到节点失败。`tests/engine-datasource.test.mjs`，旧断言保留。
-
-#5 agent 基础项已修：`tests/engine-agent-loop.test.mjs` 先复现工具 JSON 被当最终文本，再真实引擎验证一次 HTTP 工具与回灌、未声明/schema/duplicate/limit/cancel；旧单轮断言未改。完整协议及 S 子项见 [agent-strategy.md](agent-strategy.md)。
-
-conversation 回归先真实失败（第二次仍为1），修复后 engine-conversation.test.mjs 通过。状态键为 session.id + 工作流绝对路径，默认工作区 `.dify-native-state` 或 DIFY_STATE_DIR；写临时文件 fsync 后原子 rename，锁冲突明确失败，绝不自动清理旧锁或重放。成功运行提交变量，失败不提交；未验证失败节点前已写变量与官方事务边界等价，仍为 S 子项。
-
-#6（trigger/trigger-webhook）与 #9（trigger-plugin）基础桥已修，真实 engine-events.test.mjs 通过；源码固定新版 5dff246，完整部署/诊断边界见 [event-deployment.md](event-deployment.md)。原生插件订阅、公网、multipart/文件生命周期仍 S 子项，未宣称7组全兼容。
-
-#7 trigger-schedule 基础调度已修：croniter 五字段 cron/IANA 时区、真实槽时间、持久位置、去重/重启补偿；engine-schedule.test.mjs 真实引擎通过。visual_config 四种频率及 last 已追加真实引擎验证；未证明的 Dify 原生调度服务生命周期保持 S 子项，不把分布式 exactly-once 虚构成官方要求。
-
-#8 human 基础等待已修，见 [human-wait.md](human-wait.md)。新增真实回归还发现普通 HTTP 成功后下游被错误分支 guard 跳过，先复现 outputs=null，再修到真实响应进入下游（engine-http-follow.test.mjs）。只有 fail-branch 配置才按 HTTP handle 选边；旧断言未变。
-
-路由补正：engine-extraction-routing.test.mjs 先复现 .vtt 被误转换，再逐字验证官方全部49个纯文本扩展、8个仅MIME本地格式、远程URL无扩展的text/vtt，以及显式扩展优先和数组任一失败。完整官方路由已复用，不再自行维护缩减扩展名或 MIME 猜测表。
+公网入站、真实公网 Jina、真实模型自治质量、全部时区/DST 与断电恢复尚未证明；不凭未验证捏造新 bug，也不把分布式 exactly-once 当作官方承诺。语义缺口仍按 [23 项 S 清单](semantic-gaps.md) 保留。

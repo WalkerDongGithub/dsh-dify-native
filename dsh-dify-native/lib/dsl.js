@@ -408,6 +408,17 @@ export function buildIR(parsed) {
     reportTemplateGaps(diagnostics, node)
   }
 
+  // Known deviations from Dify semantics, one diagnostic per (node, gap). These
+  // are not "the workflow is broken" — they are "this node does something other
+  // than Dify would". `field-dropped` catches DSL values that were ignored; this
+  // pass also covers gaps that fire even when the DSL said nothing (routing,
+  // placeholder work, refused plugin shapes), which the field sweep cannot see.
+  for (const row of nodeDeviations({ nodes })) {
+    if (row.severity === 'rejected') diagnostics.rejected(row.nodeId, row.where ?? row.nodeKind, row.consequence, row.fix)
+    else if (row.severity === 'degraded') diagnostics.degraded(row.nodeId, row.nodeKind, row.where, row.consequence, row.fix)
+    else diagnostics.differs(row.nodeId, row.nodeKind, row.where, row.consequence, row.fix)
+  }
+
   // Container children: ReactFlow `parentId`, Dify's `data.iteration_id` /
   // `data.loop_id`, or (as a last resort) `isInIteration`/`isInLoop` + the
   // container's own edge into its start node.
@@ -915,6 +926,11 @@ export function inspectIR(ir) {
     // Per-node support level, so a caller can see at a glance which nodes run
     // with their full Dify semantics and which are simplified / placeholders.
     support: nodeSupport(ir),
+    // Per-node list of what is NOT the Dify semantics, in user terms. `support`
+    // gives one level + one reason per node; this enumerates every known gap on
+    // a node that *did* get classified `full`, so "full" can no longer read as
+    // "identical to Dify". Purely report-side: no behaviour changes.
+    deviations: nodeDeviations(ir),
     unknownKinds: ir.unknownKinds,
     // Kept for callers/tests from earlier rounds: complete coverage means this
     // list is always empty; unknown future types are visible in `unknownKinds`.
@@ -990,6 +1006,163 @@ function nodeSupport(ir) {
 /** Inspect a parsed DSL (convenience wrapper around {@link buildIR}). */
 export function inspectGraph(parsed) {
   return inspectIR(buildIR(parsed))
+}
+
+/**
+ * Known deviations from Dify semantics, per node kind, expressed for the person
+ * deciding whether to run the graph. Each entry is a `deviations()` row:
+ * `{ kind, where, severity, consequence, fix }`.
+ *
+ * Why this exists next to `nodeSupport`: the support level answers "can this
+ * node run", not "will it do what Dify would do". `full` in particular means
+ * only "no degradation rule fired" (see the README), so a node can be `full`
+ * and still silently differ. This table enumerates those differences so a
+ * graph cannot look pristine while carrying known gaps.
+ *
+ * `where` is `null` for node-wide gaps, or the exact DSL field / condition that
+ * triggers one — that is the "code location" a reader needs to check.
+ *
+ * Severity vocabulary (user-facing, not severity of an error):
+ *   silent-changed  it runs and reports success, but a different thing happens
+ *   rejected        it refuses / cannot do this at all (fails loudly)
+ *   degraded        it runs with reduced fidelity
+ */
+const DEVIATIONS = {
+  start: [
+    { where: null, severity: 'degraded', consequence: 'sys.query / sys.files are not invented from the session; supply query/files through inputs.', fix: 'pass the current turn input in `inputs`' },
+  ],
+  llm: [
+    { where: 'model.provider / model.name', severity: 'silent-changed', consequence: 'this is a request, not a command: the host profile may serve a different provider/model; the run still reports success.', fix: 'pin with DIFY_LLM_PROVIDER + DIFY_LLM_MODEL, and check meta.routeSource / meta.provider / meta.model on the node record' },
+    { where: 'memory', severity: 'degraded', consequence: 'history is filtered to real user turns and tool-call assistant messages are dropped; window size counts messages (Dify) not pairs.', fix: 'none; verify with dify_native_inspect on your memory config' },
+    { where: 'context.enabled = true', severity: 'silent-changed', consequence: '{{#context#}} always renders empty: no retrieval segments are injected.', fix: 'wire the retrieval output into prompt_template variables instead' },
+    { where: 'vision.enabled = true', severity: 'silent-changed', consequence: 'no image ever reaches the prompt; text paths still succeed, so success does not mean the image was understood.', fix: 'remove vision or expect text-only behaviour' },
+    { where: 'model.completion_params.*', severity: 'silent-changed', consequence: 'only temperature and max_tokens reach the request; other completion params are ignored (each is reported as field-dropped).', fix: 'move the setting into the provider profile, or accept the default' },
+    { where: 'structured_output_enabled', severity: 'degraded', consequence: 'validated with ajv and one repair round; a model that never conforms fails the node rather than returning loose text.', fix: 'none' },
+  ],
+  'if-else': [{ where: null, severity: 'degraded', consequence: 'compiles to a plain if/else over variable values; no Dify expression runtime is involved (operators are matched, not evaluated as a language).', fix: 'none' }],
+  code: [
+    { where: null, severity: 'silent-changed', consequence: 'runs in the harness sandbox, not the Dify code sandbox: Dify sandbox libraries are not guaranteed present, and Python runs under the trampoline (main(**inputs) serialized back as JSON).', fix: 'keep code stdlib-only, or declare `dependencies`' },
+    { where: null, severity: 'degraded', consequence: 'needs a working sandbox; without one the node refuses rather than running unconfined. Local backend may report `partial` enforcement.', fix: 'run dify_native_sandbox_probe to confirm confinement on this host' },
+  ],
+  'template-transform': [
+    { where: 'template', severity: 'silent-changed', consequence: 'Jinja2 is rendered by nunjucks (a JS port), not Python Jinja2; a few corner behaviours differ from Dify.', fix: 'keep templates to the documented filter set; a compile failure is reported at inspect time' },
+    { where: 'template', severity: 'degraded', consequence: 'the renderer is NOT a security sandbox: property access can walk the JS prototype chain (constructor/__proto__ are blocked at runtime.memberLookup, which is a mitigation, not a guarantee).', fix: 'only run templates from trusted sources' },
+  ],
+  'question-classifier': [
+    { where: 'model', severity: 'silent-changed', consequence: 'the class decision still comes from a real model call, so a fixed-reply provider yields a fixed class; provider/model routing follows the llm rules.', fix: 'none; check meta on the node record' },
+    { where: 'memory', severity: 'degraded', consequence: 'classifier instructions/topics are passed through, but memory is only the filtered session-derived window.', fix: 'none' },
+  ],
+  'http-request': [
+    { where: 'timeout', severity: 'degraded', consequence: 'connect/read/write keys ARE read and enforced, but folded into one curl --max-time deadline: no independent per-phase budgets.', fix: 'ask for a total cap instead of per-phase budgets' },
+    { where: 'ssl_verify = false', severity: 'degraded', consequence: 'certificate verification is disabled for this single request only; null fails explicitly rather than guessing.', fix: 'none' },
+    { where: 'method != GET', severity: 'degraded', consequence: 'non-GET runs through sandbox + curl instead of the host web.fetch, so it inherits the sandbox and its egress limits.', fix: 'confirm the sandbox has network access on this host' },
+  ],
+  tool: [
+    { where: 'provider_type = plugin / .difypkg', severity: 'rejected', consequence: 'plugin-shaped tools need a Dify plugin daemon and are refused by name, never guessed into another tool.', fix: 'express the call as a declarative YAML contract, or enable an exact host tool via DIFY_TOOL_PASSTHROUGH' },
+    { where: 'tool_name', severity: 'silent-changed', consequence: 'there is no name-guessing table: an unknown name is rejected, never silently swapped for a similar host tool (e.g. jina_reader is not web_fetch).', fix: 'declare a contract for the exact name under DIFY_TOOLS_ROOT' },
+    { where: 'declarative contract', severity: 'degraded', consequence: 'a contract is one HTTP request + response field mapping: no parameter type coercion, no schema validation, one-level JSON body mapping; OAuth/signed/multi-step tools cannot be expressed.', fix: 'none; see docs/dify-tool-contract.md' },
+    { where: 'tool_configurations', severity: 'degraded', consequence: 'contract credentials are interpolated into the request, so the contract file and the workflow must both be trusted.', fix: 'only point DIFY_TOOLS_ROOT at trusted directories' },
+  ],
+  'knowledge-retrieval': [
+    { where: null, severity: 'silent-changed', consequence: 'NOT vector retrieval: it is lexical grep (CJK bigrams) over local dataset directories. There is no embedding and no ranking by similarity.', fix: 'mount the dataset under DIFY_KNOWLEDGE_ROOT, and expect keyword-like recall' },
+    { where: 'retrieval_setting', severity: 'degraded', consequence: 'similarity thresholds / reranking / hybrid search options are not implemented; missing dataset ids fail loudly with the id list.', fix: 'none' },
+  ],
+  'knowledge-index': [
+    { where: null, severity: 'silent-changed', consequence: 'PLACEHOLDER: the node is scheduled and reports success, but writes nothing (status not_written, indexed 0). No vector store is mounted.', fix: 'do not rely on it creating an index' },
+  ],
+  agent: [
+    { where: 'agent_strategy_name', severity: 'rejected', consequence: 'native Dify agent strategy plugins need the plugin daemon and do not run; the explicit dsh-bounded-tools loop is used instead, or the single-turn compatibility path.', fix: 'accept the bounded-tools strategy, or export a plain llm + tool toolchain' },
+    { where: 'agent_parameters.tools', severity: 'degraded', consequence: 'tools run only if whitelisted (DIFY_TOOL_ALLOW) and declared on the agent; schema is validated and results are fed back, with duplicate/limit/cancel protection.', fix: 'declare tools on the node and whitelist them' },
+    { where: 'files', severity: 'silent-changed', consequence: 'files produced by tools never land in the final files output (always []).', fix: 'write files to the workspace and reference them by path' },
+    { where: 'memory / window', severity: 'silent-changed', consequence: 'declared memory is not wired to a real conversation, so it does not affect model requests across runs.', fix: 'none' },
+    { where: 'usage', severity: 'degraded', consequence: 'usage is a token subset only; with no price information no cost is reported (no fabricated zero).', fix: 'none' },
+  ],
+  'parameter-extractor': [
+    { where: 'reasoning_mode', severity: 'degraded', consequence: 'declared reasoning mode is used to build the prompt, but Dify s full extraction schema handling is not reproduced field-for-field.', fix: 'none' },
+  ],
+  'document-extractor': [
+    { where: null, severity: 'degraded', consequence: 'uses fixed official extractor functions (PDFium 4.30.0 / python-docx / pandas+openpyxl); optional dependencies must be installed or the node fails with the install command.', fix: 'run ./scripts/install-extraction.sh' },
+    { where: 'file format', severity: 'rejected', consequence: '.doc .ppt .pptx .epub .eml .msg .xls are refused with a missing-conversion-chain error rather than guessed from ZIP/XML.', fix: 'convert to a supported modern format first' },
+    { where: 'file content', severity: 'degraded', consequence: 'no OCR: a scanned/image-only PDF yields no text. Single-file text is capped at 4 MiB (over that fails, never truncates).', fix: 'pre-OCR the file yourself' },
+    { where: 'is_array_file', severity: 'degraded', consequence: 'any one failing file fails the whole node; it does not silently skip that file.', fix: 'none; split the array if partial success is wanted' },
+  ],
+  datasource: [
+    { where: 'provider_type = plugin', severity: 'rejected', consequence: 'native online_document / online_drive datasource plugins are not supported (need plugin package, account, and Dify file storage).', fix: 'use the declared HTTP bridge or explicit local file records' },
+    { where: 'datasource_parameters', severity: 'silent-changed', consequence: 'plugin paths are never guessed; an undeclared path is refused rather than resolved from a default.', fix: 'declare the path explicitly' },
+    { where: null, severity: 'degraded', consequence: 'restricted to sys.datasource_type / sys.datasource_info, local file & website outputs, and explicit local/file records; a corrupt .jsonl fails the node.', fix: 'none' },
+  ],
+  'human-input': [
+    { where: 'nested in iteration/loop', severity: 'rejected', consequence: 'container inner checkpointing is not implemented; the graph is refused at compile time, before side effects.', fix: 'move the human-input to the top level' },
+    { where: 'inputs[].type', severity: 'rejected', consequence: 'only text / paragraph fields are supported; select / file and other advanced form fields are refused before side effects.', fix: 'reduce the form to text fields' },
+    { where: 'timeout', severity: 'silent-changed', consequence: 'an expired pending does NOT auto-resume on its own: something must call dify_native_resume or poll before the timeout branch runs.', fix: 'drive the timeout explicitly' },
+    { where: 'user_actions', severity: 'degraded', consequence: 'an explicit injected action resolves immediately; otherwise the run returns a waiting checkpoint and never replays upstream effects on resume.', fix: 'none' },
+  ],
+  iteration: [
+    { where: 'is_parallel = true', severity: 'degraded', consequence: 'compiles to the engine parallel combinator; results follow engine ordering, not a Dify worker pool with its own scheduling.', fix: 'none' },
+    { where: 'error_handle_mode', severity: 'degraded', consequence: 'error handling and flatten_output are implemented, but Dify full per-item error payload shape is not reproduced.', fix: 'none' },
+  ],
+  loop: [{ where: 'break_conditions', severity: 'degraded', consequence: 'compiles to a real while loop over variable values with logical_operator; no Dify expression runtime is involved.', fix: 'none' }],
+  'variable-aggregator': [
+    { where: null, severity: 'silent-changed', consequence: 'follows Dify 1.9.1: takes the first branch that merely EXISTS, without looking at content — a first branch that ran and yielded null/""/0/[] stops there instead of falling through.', fix: 'order branches so a real value comes first' },
+  ],
+  answer: [{ where: null, severity: 'degraded', consequence: 'answers accumulate into `answers`; streaming answer tokens to an interactive client is not reproduced.', fix: 'none' }],
+  'list-operator': [{ where: 'filter_by / order_by', severity: 'degraded', consequence: 'filtering, ordering and limiting are implemented over plain values; Dify advanced sort/filter shapes are not all covered.', fix: 'none' }],
+  assigner: [{ where: 'write_mode', severity: 'degraded', consequence: 'variable assignment and write modes are implemented, but a run that fails AFTER assigning does not commit variables: the transaction boundary is not proven equal to Dify per-node persistence.', fix: 'do not rely on partially-completed runs persisting state' }],
+  'trigger-webhook': [
+    { where: 'content_type', severity: 'rejected', consequence: 'multipart / binary / file uploads are explicitly refused; only the supported content types are parsed.', fix: 'upload the file first and pass its description through the payload' },
+    { where: 'async / response_body', severity: 'rejected', consequence: 'async mode, custom response_body and long-timeout webhook controls are not implemented; only status-code configuration is. The listener returns synchronously.', fix: 'respond synchronously' },
+  ],
+  'trigger-schedule': [
+    { where: null, severity: 'degraded', consequence: 'a local declarative cron (5-field + IANA timezone, real slot times, persistent dedup, restart catch-up), not Dify ScheduleService: no native create/update/delete of server-side plans.', fix: 'keep schedules in this runtime config; needs ./scripts/install-events.sh' },
+  ],
+  'trigger-plugin': [
+    { where: null, severity: 'rejected', consequence: 'native plugin event subscriptions do not run; only an explicitly `bridge: true` HMAC-signed HTTP bridge is honored.', fix: 'publish to the signed bridge endpoint instead' },
+  ],
+  trigger: [
+    { where: null, severity: 'degraded', consequence: 'a local alias / extension with explicit injection or a declared listener; it is not an official Dify node with identical semantics.', fix: 'none' },
+  ],
+  'datasource-empty': [
+    { where: null, severity: 'degraded', consequence: 'a local alias, not an official Dify node; semantics are the datasource subset above.', fix: 'none' },
+  ],
+}
+
+/**
+ * Kinds whose missing semantics are already unavoidable because they never run.
+ * Only the authoring-only `note` stays here: `knowledge-index` is deliberately
+ * NOT excluded — it is scheduled and reports success while writing nothing,
+ * which is precisely the silent case a deviation row must keep visible.
+ */
+const NO_WORK_KINDS = new Set(['note'])
+
+/**
+ * Enumerate every known deviation on every node of the graph.
+ *
+ * A node whose kind is unknown has no deviation list (it does no work at all —
+ * `nodeSupport` already reports it as passthrough); `generic` is reported here
+ * as a single silent-changed row so that "unknown node" is visible in the same
+ * place as every other gap.
+ *
+ * @param ir - IR from {@link buildIR}.
+ * @returns array of `{ nodeId, nodeKind, where, severity, consequence, fix }`.
+ */
+export function nodeDeviations(ir) {
+  const out = []
+  for (const node of ir.nodes) {
+    if (node.kind === 'generic') {
+      out.push({
+        nodeId: node.id,
+        nodeKind: node.kind,
+        where: `type "${node.rawType}"`,
+        severity: 'silent-changed',
+        consequence: 'unknown node type: the node is scheduled and the run still reports success, but the node does NO work — it is a passthrough.',
+        fix: 'upgrade the runtime for this node type, or remove the node',
+      })
+      continue
+    }
+    if (NO_WORK_KINDS.has(node.kind)) continue
+    for (const row of DEVIATIONS[node.kind] ?? []) out.push({ nodeId: node.id, nodeKind: node.kind, ...row })
+  }
+  return out
 }
 
 /**

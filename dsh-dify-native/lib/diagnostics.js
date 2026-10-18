@@ -30,6 +30,20 @@ export const MODE = {
 }
 
 /**
+ * Subject namespace for the Dify-semantics deviation rows (`semantics-differ`,
+ * `semantics-degraded`, `node-unsupported`).
+ *
+ * These coexist with `field-dropped`, whose subject is the bare `"<node>:<field>"`
+ * — "you set this, we ignored it". A deviation says something different: "this
+ * node behaves differently from Dify on this axis", and it fires whether or not
+ * the DSL set the field. Sharing a namespace made a deviation look like a
+ * dropped field on a field that IS implemented (e.g. `structured_output_enabled`),
+ * breaking the honest "not implemented => reported" contract the other codes
+ * guarantee. The prefix keeps the two separable by subject alone.
+ */
+export const DEVIATION_PREFIX = '~'
+
+/**
  * Collect diagnostics for one compile or run.
  * @returns a collector with the sink shape the rest of the package uses.
  */
@@ -73,6 +87,49 @@ export function createDiagnostics() {
         `${subject}:template`,
         `${nodeKind} ${subject}: Jinja2 template does not compile — ${problem}. ` +
           'This is a template error in the workflow; the node will fail when the run reaches it.',
+      )
+    },
+    /**
+     * The node runs and reports success, but does something DIFFERENT from Dify
+     * rather than something less. Distinct from `node-simplified` because a
+     * reduced implementation is visible in the output shape, while this one
+     * usually is not: e.g. an LLM served by another model still returns text.
+     *
+     * `where` is the DSL field/condition responsible, `what` the user-visible
+     * consequence, `fix` what to do about it (may be empty).
+     *
+     * IMPORTANT: these rows must NEVER be used to downgrade a support level.
+     * If they were, every node of a known kind would become `simplified` and the
+     * level would stop discriminating. They are reported as their own codes.
+     */
+    differs(subject, nodeKind, where, what, fix) {
+      add(
+        'notice',
+        'semantics-differ',
+        `${DEVIATION_PREFIX}${subject}:${where}`,
+        `${nodeKind} ${subject} [${where}] differs from Dify: ${what}${fix ? ` -> ${fix}` : ''}`,
+      )
+    },
+    /** The node runs with reduced fidelity on this axis (a subset, not a swap). */
+    degraded(subject, nodeKind, where, what, fix) {
+      add(
+        'warning',
+        'semantics-degraded',
+        `${DEVIATION_PREFIX}${subject}:${where ?? 'node'}`,
+        `${nodeKind} ${subject}${where ? ` [${where}]` : ''} is degraded: ${what}${fix ? ` -> ${fix}` : ''}`,
+      )
+    },
+    /**
+     * The node cannot do this at all. It fails or is refused before side
+     * effects — loud, never silent. Reported up front so `inspect` reveals it
+     * before a run spends models on the nodes leading up to it.
+     */
+    rejected(subject, where, what, fix) {
+      add(
+        'warning',
+        'node-unsupported',
+        `${DEVIATION_PREFIX}${subject}:${where}`,
+        `node ${subject} [${where}] is not supported: ${what}${fix ? ` -> ${fix}` : ''}`,
       )
     },
     /** Free-form diagnostic for the compiler's own structural notices. */
