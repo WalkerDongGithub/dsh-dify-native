@@ -1184,7 +1184,13 @@ export function nodeDeviations(ir) {
       continue
     }
     if (NO_WORK_KINDS.has(node.kind)) continue
-    for (const row of DEVIATIONS[node.kind] ?? []) out.push({ nodeId: node.id, nodeKind: node.kind, bites: bites(node, row), ...row })
+    for (const row of DEVIATIONS[node.kind] ?? []) {
+      // The row's `when` predicate stays inside this module: the result is
+      // handed to tool callers as JSON, and a function in it makes the whole
+      // value fail dsh's lossless-JSON boundary for the tool result.
+      const { when, ...declared } = row
+      out.push({ nodeId: node.id, nodeKind: node.kind, bites: bites(node, row), ...declared })
+    }
   }
   return out
 }

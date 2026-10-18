@@ -32,6 +32,11 @@
 **不要问"这个能不能用"——README 的第二、三节已经按节点列清了。**
 README 说不行而实际能跑，或者 README 说能跑而实际失败，都是 bug，都该提 issue。
 
+> **已知问题（2026-10-18，已修，`git pull` 即可）**：在这个修复之前，`dify_native_inspect`
+> 对**任何**真实导出的图都会报 `"value is not lossless JSON"`、一个字段都给不出来。
+> 原因是 `deviations` 里混进了内部判定函数（`when`），dsh 校验工具返回值时会整包拒绝。
+> 回归：`tests/tool-output-json.test.mjs`。
+
 如果你是想改这个包的人和 agent：内部设计、诊断机制、文件职责在[文末](#八给开发者和-agent-的内部说明)，其中"为什么是这个形状"一节解释了两个被引擎接口逼出来的设计决定。
 
 ---

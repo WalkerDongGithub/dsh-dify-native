@@ -37,7 +37,8 @@ for test in \
   tests/engine-extraction-routing.test.mjs \
   tests/package-deployment.test.mjs \
   tests/engine-http-timeout.test.mjs \
-  tests/research-samples.test.mjs
+  tests/research-samples.test.mjs \
+  tests/tool-output-json.test.mjs
 do
   echo "== $test"
   node "$test"
