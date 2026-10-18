@@ -41,7 +41,7 @@ profile 默认模型上）。这是有意的——这正是"用 dsh 的模型预
 
 ```bash
 # 从公开镜像克隆（或从 Gitea 主仓克隆，二者内容一致）
-git clone https://github.com/<owner>/dsh-dify-native.git
+git clone https://github.com/WalkerDongGithub/dsh-dify-native.git
 cd dsh-dify-native/dsh-dify-native
 npm ci
 ./tests/run-all.sh          # → ALL TESTS OK（需要已装 dsh、python3、ripgrep）

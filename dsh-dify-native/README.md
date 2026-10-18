@@ -55,7 +55,7 @@ README 说不行而实际能跑，或者 README 说能跑而实际失败，都�
 先 clone（路径随意，下文用 `$PLUGIN` 指代你自己 clone 的那一层；公开镜像即可）：
 
 ```sh
-git clone https://github.com/<owner>/dsh-dify-native.git
+git clone https://github.com/WalkerDongGithub/dsh-dify-native.git
 cd dsh-dify-native && git pull         # 仓库更新频繁，每次用之前先拉
 export PLUGIN="$PWD/dsh-dify-native"  # 插件在仓库的 dsh-dify-native/ 子目录
 cd "$PLUGIN" && npm ci                 # 三个 JS 依赖（yaml/ajv/nunjucks），漏了插件加载就失败
