@@ -40,9 +40,20 @@ README 说不行而实际能跑，或者 README 说能跑而实际失败，都�
 
 ### 1. 挂进 profile
 
+先 clone（路径随意，下文用 `$PLUGIN` 指代你自己 clone 的那一层）：
+
+```sh
+git clone http://127.0.0.1:8443/walker/dsh-dify-runtime.git
+cd dsh-dify-runtime && git pull        # 仓库更新频繁，每次用之前先拉
+export PLUGIN="$PWD/dsh-dify-native"  # 插件在仓库的 dsh-dify-native/ 子目录
+cd "$PLUGIN" && npm ci                 # 三个 JS 依赖（yaml/ajv/nunjucks），漏了插件加载就失败
+```
+
+然后挂进 profile：
+
 ```jsonc
 // ~/.dsh/profiles/<name>/package.json
-"dependencies": { "dsh-dify-native": "link:/home/walker/dify-test/dsh-dify-native" }
+"dependencies": { "dsh-dify-native": "link:改成你 clone 的绝对路径/dsh-dify-native" }
 ```
 
 `package.json` 里已经声明了 bundle patch，profile 的 `dsh.profile.bundles` 里加一行 `dsh-dify-native` 即可。
@@ -51,7 +62,7 @@ README 说不行而实际能跑，或者 README 说能跑而实际失败，都�
 ### 2. 装可选依赖（只装你要用的）
 
 ```sh
-cd /home/walker/dify-test/dsh-dify-native
+cd "$PLUGIN"
 
 ./scripts/install-extraction.sh   # 只在用 document-extractor 时：PDF / DOCX / XLSX
 ./scripts/install-events.sh       # 只在用 cron 定时、webhook 入站时
@@ -345,7 +356,7 @@ note                   编译器自己的结构性提示
 ## 七、我自己验证一遍
 
 ```sh
-cd /home/walker/dify-test/dsh-dify-native
+cd "$PLUGIN"
 ./tests/run-all.sh        # → ALL TESTS OK
 ```
 

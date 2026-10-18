@@ -2,7 +2,19 @@
 
 JavaScript 依赖 `nunjucks`、`yaml`、`ajv` 都在 package.json 直接声明，package-lock.json 固定解析结果。源码检出执行 `npm ci`；打包后在目标插件目录安装依赖或 `npm install /abs/dsh-dify-native-0.2.0.tgz`。不依赖 dsh 安装目录里的 ambient 模块。
 
-`npm pack` 包含 lib（含 Python helper）、requirements-extraction.txt、requirements-events.txt、scripts、docs 和 cordis.patch.yml。以下脚本相对插件安装根目录执行：
+## 1. clone 后先装 JS 依赖
+
+```bash
+git clone http://127.0.0.1:8443/walker/dsh-dify-runtime.git
+cd dsh-dify-runtime/dsh-dify-native
+npm ci                 # 必须：缺 yaml/ajv/nunjucks 时插件连加载都失败
+```
+
+`npm pack` 包含 lib（含 Python helper）、requirements-extraction.txt、requirements-events.txt、scripts、docs 和 cordis.patch.yml。
+
+## 2. 可选 Python 依赖
+
+以下脚本相对插件安装根目录执行：
 
 ```bash
 ./scripts/install-extraction.sh
