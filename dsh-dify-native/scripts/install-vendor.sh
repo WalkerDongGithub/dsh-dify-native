@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Install one optional Python dependency set into a fresh plugin-local directory.
-# Usage: install-vendor.sh <events|extraction>
+# Usage: install-vendor.sh <events|extraction|code>
 # Refuses to overwrite an existing target: pick a new directory or a Python env.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-group="${1:?usage: install-vendor.sh <events|extraction>}"
+group="${1:?usage: install-vendor.sh <events|extraction|code>}"
 var="DIFY_$(echo "$group" | tr '[:lower:]' '[:upper:]')_VENDOR"
 target="${!var:-$PWD/.vendor-$group}"
 if [[ -e "$target" ]]; then

@@ -1829,8 +1829,19 @@ function rootList(value) {
   return String(value ?? '').split(':').filter((item) => item.length > 0)
 }
 
-/** Locate the vendored Python libraries shipped with the plugin. */
-export function defaultPythonPath(runtimeRoot) {
-  const vendor = join(runtimeRoot, 'vendor')
-  return existsSync(vendor) ? vendor : ''
+/**
+ * Locate the Python libraries for `code` nodes.
+ *
+ * The plugin installs them with `./scripts/install-vendor.sh code`, which
+ * defaults to `.vendor-code` next to this file. `DSH_DIFY_RUNTIME_ROOT` is kept
+ * for deployments that already point at a prepared vendor directory (a plain
+ * `<root>/vendor` or `<root>` itself containing the packages).
+ */
+export function defaultPythonPath(pluginRoot) {
+  const candidates = [
+    join(pluginRoot, '.vendor-code'),
+    join(pluginRoot, 'vendor'),
+    pluginRoot,
+  ]
+  return candidates.find((dir) => existsSync(dir)) ?? ''
 }

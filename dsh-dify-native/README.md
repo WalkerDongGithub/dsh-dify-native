@@ -71,6 +71,7 @@ cd "$PLUGIN"
 
 ./scripts/install-extraction.sh   # 只在用 document-extractor 时：PDF / DOCX / XLSX
 ./scripts/install-events.sh       # 只在用 cron 定时、webhook 入站时
+./scripts/install-vendor.sh code  # 只在 code 节点 import jieba / json_repair 时
 # 两者都是 scripts/install-vendor.sh <extraction|events> 的薄包装
 ```
 
@@ -353,7 +354,7 @@ note                   编译器自己的结构性提示
 | `DIFY_EXTRACTION_VENDOR` | `.vendor-extraction` | 文档提取依赖的安装目录 |
 | `DIFY_EVENTS_VENDOR` | `.vendor-events` | cron / event 依赖的安装目录 |
 | `DIFY_STATE_DIR` | `<workspace>/.dify-native-state` | conversation 状态的落盘目录 |
-| `DSH_DIFY_RUNTIME_ROOT` | `../dsh-dify-runtime/runtime` | 找 vendored Python 库的根 |
+| `DSH_DIFY_RUNTIME_ROOT` | 插件根目录 | code 节点 Python 库（jieba / json_repair）的根；默认找插件自己的 `.vendor-code` |
 | `DSH_ENTRY` | PATH 里的 `dsh` | 手动指定 dsh 发行版入口（只有跑测试时需要） |
 
 ---

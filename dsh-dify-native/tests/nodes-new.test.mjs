@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { compileGraph, inspectGraph, parseDifyDsl } from '../lib/dsl.js'
-import { createDifyNodeProvider } from '../lib/provider.js'
+import { createDifyNodeProvider, defaultPythonPath } from '../lib/provider.js'
 
 const ROOT = new URL('..', import.meta.url).pathname
 const DSL = join(ROOT, '..', 'dsl')
@@ -52,7 +52,7 @@ function makeCtx({ replies = [], tools, web } = {}) {
 function providerFor(ctx) {
   return createDifyNodeProvider(ctx, {
     name: 'dify-node',
-    pythonPath: process.env.DIFY_PYTHONPATH ?? join(ROOT, '..', 'dsh-dify-runtime', 'runtime', 'vendor'),
+    pythonPath: process.env.DIFY_PYTHONPATH ?? defaultPythonPath(join(ROOT, '..')),
     knowledgeRoot: join(TMP, 'knowledge'),
   })
 }

@@ -26,7 +26,9 @@ import { deriveChatHistory } from './session-history.js'
 const name = 'dsh-dify-native'
 const inject = ['tools']
 const HERE = dirname(fileURLToPath(import.meta.url))
-const RUNTIME_ROOT = process.env.DSH_DIFY_RUNTIME_ROOT ?? join(HERE, '..', '..', 'dsh-dify-runtime', 'runtime')
+// Code-node Python packages: installed into this plugin's own .vendor-code.
+// DSH_DIFY_RUNTIME_ROOT still overrides for a pre-built vendor directory.
+const RUNTIME_ROOT = process.env.DSH_DIFY_RUNTIME_ROOT ?? join(HERE, '..')
 
 const PATH_PARAM = {
   type: 'object',

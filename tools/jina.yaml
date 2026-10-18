@@ -1,0 +1,21 @@
+# 用声明式契约复刻 Dify 官方的 jina_reader 工具
+provider: jina
+tool: jina_reader
+label: { zh_Hans: 获取单页面, en_US: Fetch Single Page }
+parameters:
+  - { name: url, type: string, form: llm, required: true }
+  - { name: api_key, type: secret-input, form: form, required: false }
+  - { name: target_selector, type: string, form: form, required: false }
+  - { name: no_cache, type: boolean, form: form, required: false }
+request:
+  method: GET
+  url: "https://r.jina.ai/{{parameters.url}}"
+  headers:
+    Accept: application/json
+    Authorization: "Bearer {{credentials.api_key}}"
+    X-Target-Selector: "{{credentials.target_selector}}"
+    X-No-Cache: "{{credentials.no_cache}}"
+response:
+  text: "{{response.data}}"
+  variables:
+    title: "{{response.title}}"

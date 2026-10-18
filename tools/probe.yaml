@@ -1,0 +1,14 @@
+
+provider: probe
+tool: raw
+parameters:
+  - { name: url, type: string, form: llm, required: true }
+  - { name: token, type: secret-input, form: form, required: false }
+request:
+  method: GET
+  url: "{{parameters.url}}"
+  headers:
+    Accept: "text/plain"
+    Authorization: "Bearer {{credentials.token}}"
+response:
+  text: "{{response}}"

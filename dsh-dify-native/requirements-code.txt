@@ -1,0 +1,4 @@
+# Python libraries the sample code nodes import (jieba.yml, json-repair.yml).
+# Optional: a code node that does not import these needs nothing installed.
+jieba==0.42.1
+json_repair==0.64.0
