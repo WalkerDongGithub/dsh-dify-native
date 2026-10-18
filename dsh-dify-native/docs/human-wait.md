@@ -12,4 +12,4 @@
 
 边界：顶层顺序等待、多个连续顶层等待、已完成容器后的等待可表示；容器内部暂停当前在编译时明确拒绝，避免从容器头重放。高级 select/file 表单模式也在执行前明确拒绝，仍为 S；不擅自当字符串。未验 Dify 通知/权限链接/数据库表单生命周期。不能声称 human-input 全兼容。
 
-验证 `tests/engine-human-wait.test.mjs`：实际 HTTP 副作用 → waiting → 关闭重开 → 提交 → 正确分支；副作用总计一次。重复提交、无效动作、等待时误新 run、到期恢复均断言。`engine-human-form.test.mjs` 先复现未插值与变量默认值问题，再验证逐字 form 输出。所有路径复用 real-harness 并实际 workflowEngine.start，未 mock 引擎。
+验证 `tests/engine-human-wait.test.mjs`：实际 HTTP 副作用 → waiting → 关闭重开 → 提交 → 正确分支；副作用总计一次。重复提交、无效动作、等待时误新 run、到期恢复均断言。`engine-human-form.test.mjs` 逐字验证插值与变量默认值。所有路径复用 real-harness 并实际 workflowEngine.start，未 mock 引擎。

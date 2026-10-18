@@ -117,12 +117,3 @@ export function memoryOptions(memory) {
     rolePrefix: memory.role_prefix ?? {},
   }
 }
-
-/**
- * Read the conversation id for `sys.conversation_id` from a run's parent.
- * @param session - the live `session` object, if any.
- */
-export function conversationIdOf(session) {
-  const id = session?.id
-  return typeof id === 'string' ? id : undefined
-}

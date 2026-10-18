@@ -15,4 +15,4 @@ JavaScript 依赖 `nunjucks`、`yaml`、`ajv` 都在 package.json 直接声明�
 
 真实执行还需安装 dsh，装载 session/tools/subagent/PTC runtime/workflow engine、sandbox、模型路由等服务；本插件不会用 mock 引擎替代缺失服务。安装依赖不等于外部模型、插件、知识库或账户已经可用。
 
-`tests/package-deployment.test.mjs` 在 /tmp 独立目录 npm pack → npm install --ignore-scripts → 新 Node 进程 import，并断言三个依赖都从该临时 node_modules 解析。随后用显式 Python 依赖路径运行打包后的 PDF helper 与 cron helper，不重复安装 Python 大包。先复现打包缺 requirements，再复现干净 import 缺 yaml，修复后输出 CLEAN PACKAGE IMPORT OK / PACKAGE DEPLOYMENT OK。测试需 npm registry 网络，失败会使全量测试失败，不 skip。
+`tests/package-deployment.test.mjs` 在 /tmp 独立目录 npm pack → npm install --ignore-scripts → 新 Node 进程 import，并断言三个依赖都从该临时 node_modules 解析。随后用显式 Python 依赖路径运行打包后的 PDF helper 与 cron helper，不重复安装 Python 大包。通过时输出 CLEAN PACKAGE IMPORT OK / PACKAGE DEPLOYMENT OK。测试需 npm registry 网络，失败会使全量测试失败，不 skip。

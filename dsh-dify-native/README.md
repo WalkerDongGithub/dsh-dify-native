@@ -73,7 +73,7 @@ cd /home/walker/dify-test/dsh-dify-native
 | `template-transform` | 完整两层语法：`{{#node.var#}}` 由编译器预替换，其余交给 Jinja2（经 nunjucks）。纯变量拼接零模型调用 |
 | `variable-aggregator` | 按 Dify 1.9.1 语义取第一路**存在**的变量；组模式支持 |
 | `assigner` / `list-operator` | — |
-| `iteration` / `loop` | 编译成普通 `for` / `while`；`is_parallel: true` 用引擎的 parallel 组合子；嵌套容器已修 |
+| `iteration` / `loop` | 编译成普通 `for` / `while`；`is_parallel: true` 用引擎的 parallel 组合子；支持嵌套容器 |
 | `question-classifier` / `parameter-extractor` | 真实 provider 解析，固定 JSON 下逐字断言 |
 | `template-transform` 的 Jinja 循环 / 过滤器 | `for` / `if` / `set` / 嵌套 / `upper` `round` `join` `default` `sort` `map` `sum(attribute=)` `tojson` `unique` 均可用；写错会报错，不会把模板原文当结果返回 |
 
@@ -415,7 +415,7 @@ conversation 变量按 `session.id + 工作流绝对路径` 保存在 `.dify-nat
 | `code-file-input.test.mjs` | code 节点的文件输入 |
 | `provider.test.mjs` | classifier / http-request / tool 白名单 / knowledge-retrieval |
 | `tool-contracts.test.mjs` / `tool-node.test.mjs` | 声明式契约；tool 节点分派（契约 → `.difypkg` 拒绝 → passthrough → 拒绝） |
-| `structured-output.test.mjs` | structured_output 的 ajv 校验 + 一次修复回合 |
+| `structured-output.test.mjs` | structured_output 的 ajv 校验，含一次重试回合 |
 | `translation-script.test.mjs` / `container-scope.test.mjs` | 分支编译成普通 `if`；容器作用域及嵌套回归 |
 | `engine-e2e.test.mjs` / `engine-nested.test.mjs` | 真实 dsh 引擎的 18 样本矩阵、分支、失败和嵌套容器 |
 | `engine-extraction.test.mjs` / `engine-extraction-differential.test.mjs` / `engine-extraction-routing.test.mjs` | 数组/长文本/远程 bytes/失败；8 格式与官方函数逐字差分；49 扩展 + 8 MIME 路由 |

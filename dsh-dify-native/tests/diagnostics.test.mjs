@@ -193,10 +193,13 @@ function m_assertId(inspection) {
       fullySupported.add(`${file}:${row.id}:${row.mode}`)
     }
   }
-  // Iteration / list-operator / translator samples use only fully implemented nodes.
+  // These samples set no field the runtime ignores: their exports lose nothing.
+  // The node may still be `simplified` for a standing reason (an is_parallel
+  // iteration follows engine ordering, an llm routes through the profile), so
+  // assert on dropped fields rather than on the level.
   for (const file of ['translation.yml', 'json-repair.yml', 'mature-ticket-triage.yml', 'nodes-iteration.yml', 'jieba.yml']) {
     const inspection = inspect(readFileSync(join(DSL_DIR, file), 'utf8'))
-    assert.deepEqual(inspection.support.filter((row) => row.mode !== 'full'), [], `${file} is fully supported`)
+    assert.deepEqual(inspection.diagnostics.filter((row) => row.code === 'field-dropped'), [], `${file} drops no declared field`)
   }
   // ...while deviations from Dify semantics ARE reported on every real sample:
   // a graph must never look pristine just because every node classifies `full`.

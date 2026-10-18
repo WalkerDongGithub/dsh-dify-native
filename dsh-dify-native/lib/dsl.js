@@ -804,7 +804,7 @@ function agentParameterMap(data) {
   return out
 }
 
-/** Dify agent model, from either the legacy strategy params or the node block. */
+/** Agent model: Dify carries it in strategy params when present, else in the node block. */
 function agentModel(data) {
   const params = agentParameterMap(data)
   const fromParams = params.model
@@ -932,8 +932,8 @@ export function inspectIR(ir) {
     // "identical to Dify". Purely report-side: no behaviour changes.
     deviations: nodeDeviations(ir),
     unknownKinds: ir.unknownKinds,
-    // Kept for callers/tests from earlier rounds: complete coverage means this
-    // list is always empty; unknown future types are visible in `unknownKinds`.
+    // Always empty: every Dify block type is known; unknown future types appear
+    // in `unknownKinds` instead.
     unsupported: [],
     issues,
     warnings: ir.warnings,
@@ -952,53 +952,41 @@ export function inspectIR(ir) {
  * but does not perform the node's work; `passthrough` means unknown type.
  */
 function nodeSupport(ir) {
+  const gapsByNode = new Map()
+  for (const row of nodeDeviations(ir)) {
+    if (!gapsByNode.has(row.nodeId)) gapsByNode.set(row.nodeId, [])
+    gapsByNode.get(row.nodeId).push(row)
+  }
+  const codesOn = (id, code) => (ir.diagnostics ?? []).some((row) => row.code === code && row.subject.split(':')[0] === id)
+  // Severity order used when a node has several gaps: the one a user must act
+  // on first leads (a refusal, then a silent swap, then a fidelity loss).
+  const worst = (rows) => ['rejected', 'silent-changed', 'degraded'].map((sev) => rows.find((row) => row.severity === sev)).find(Boolean)
+
   const rows = []
   for (const node of ir.nodes) {
     if (MARKER_KINDS.has(node.kind) || node.kind === 'start' || node.kind === 'end' || node.kind === 'note') continue
-    let mode = 'full'
-    let reason = ''
     if (node.kind === 'generic') {
-      mode = 'passthrough'
-      reason = 'unknown node type'
-    } else if (node.kind === 'trigger' || node.kind.startsWith('trigger-')) {
-      mode = 'simplified'
-      reason = 'declared local event/schedule bridge or explicit injection; native Dify trigger services are not implemented'
-    } else if (node.kind === 'http-request' && node.data?.timeout && typeof node.data.timeout === 'object') {
-      mode = 'simplified'
-      reason = 'timeout keys consumed as a single deadline; independent connect/read/write phase budgets remain S'
-    } else if (node.kind === 'knowledge-index') {
-      mode = 'placeholder'
-      reason = 'no vector store mounted; nothing is written'
-    } else if (node.kind === 'knowledge-retrieval') {
-      mode = 'simplified'
-      reason = 'lexical grep over local files, not embedding retrieval'
-    } else if (node.kind === 'agent') {
-      mode = 'simplified'
-      reason = 'explicit dsh-bounded-tools supports a bounded loop; native strategy plugins remain unverified'
-    } else if (node.kind === 'document-extractor') {
-      mode = 'simplified'
-      reason = 'fixed official PDF/Office/text extractors; optional dependencies and legacy formats require deployment'
-    } else if (node.kind === 'human-input') {
-      mode = 'simplified'
-      reason = 'durable top-level waiting/resume or explicit action injection; nested form modes remain S'
-    } else if (node.kind === 'datasource') {
-      mode = 'simplified'
-      reason = 'system file/website outputs and declared HTTP bridge; native datasource plugins remain unverified'
+      rows.push({ id: node.id, kind: node.kind, mode: 'passthrough', reason: 'unknown node type' })
+      continue
     }
-    // A dropped field on an otherwise-full node is still a partial implementation.
-    // Diagnostic subjects are `"<nodeId>:<field>"` for field drops and the bare
-    // node id for node-level ones, so match on the prefix.
-    if (reason.length === 0 && (ir.diagnostics ?? []).some((row) => row.code === 'field-dropped' && row.subject.split(':')[0] === node.id)) {
-      mode = 'simplified'
-      reason = 'some declared fields were dropped'
+    const gaps = gapsByNode.get(node.id) ?? []
+    if (PLACEHOLDER_KINDS.has(node.kind)) {
+      rows.push({ id: node.id, kind: node.kind, mode: 'placeholder', reason: gaps[0]?.consequence ?? 'does no work' })
+      continue
     }
-    // An invalid Jinja2 template is worse than a dropped field: the node is
-    // reached and fails. Report it ahead of the generic drop reason.
-    if ((ir.diagnostics ?? []).some((row) => row.code === 'template-jinja-invalid' && row.subject.split(':')[0] === node.id)) {
-      mode = 'simplified'
-      reason = 'Jinja2 template does not compile; the node fails when reached'
-    }
-    rows.push({ id: node.id, kind: node.kind, mode, ...(reason.length > 0 ? { reason } : {}) })
+
+    // A node is degraded when this export asks for something that behaves
+    // differently (a `when` row that bit), or when the kind is a reduced
+    // implementation outright. A broken template leads, because it fails.
+    const biting = worst(gaps.filter((row) => row.bites))
+    const standing = worst(gaps)
+    const reason = codesOn(node.id, 'template-jinja-invalid')
+      ? 'Jinja2 template does not compile; the node fails when reached'
+      : codesOn(node.id, 'field-dropped')
+        ? 'some declared fields were dropped'
+        : biting?.consequence ?? (SIMPLIFIED_KINDS.has(node.kind) ? standing?.consequence : undefined)
+    const mode = reason === undefined ? 'full' : 'simplified'
+    rows.push({ id: node.id, kind: node.kind, mode, ...(reason === undefined ? {} : { reason }) })
   }
   return rows
 }
@@ -1034,10 +1022,10 @@ const DEVIATIONS = {
   llm: [
     { where: 'model.provider / model.name', severity: 'silent-changed', consequence: 'this is a request, not a command: the host profile may serve a different provider/model; the run still reports success.', fix: 'pin with DIFY_LLM_PROVIDER + DIFY_LLM_MODEL, and check meta.routeSource / meta.provider / meta.model on the node record' },
     { where: 'memory', severity: 'degraded', consequence: 'history is filtered to real user turns and tool-call assistant messages are dropped; window size counts messages (Dify) not pairs.', fix: 'none; verify with dify_native_inspect on your memory config' },
-    { where: 'context.enabled = true', severity: 'silent-changed', consequence: '{{#context#}} always renders empty: no retrieval segments are injected.', fix: 'wire the retrieval output into prompt_template variables instead' },
-    { where: 'vision.enabled = true', severity: 'silent-changed', consequence: 'no image ever reaches the prompt; text paths still succeed, so success does not mean the image was understood.', fix: 'remove vision or expect text-only behaviour' },
-    { where: 'model.completion_params.*', severity: 'silent-changed', consequence: 'only temperature and max_tokens reach the request; other completion params are ignored (each is reported as field-dropped).', fix: 'move the setting into the provider profile, or accept the default' },
-    { where: 'structured_output_enabled', severity: 'degraded', consequence: 'validated with ajv and one repair round; a model that never conforms fails the node rather than returning loose text.', fix: 'none' },
+    { where: 'context.enabled = true', when: (d) => d.context?.enabled === true, severity: 'silent-changed', consequence: '{{#context#}} always renders empty: no retrieval segments are injected.', fix: 'wire the retrieval output into prompt_template variables instead' },
+    { where: 'vision.enabled = true', when: (d) => d.vision?.enabled === true, severity: 'silent-changed', consequence: 'no image ever reaches the prompt; text paths still succeed, so success does not mean the image was understood.', fix: 'remove vision or expect text-only behaviour' },
+    { where: 'model.completion_params.*', when: (d) => Object.keys(d.model?.completion_params ?? {}).some((k) => k !== 'temperature' && k !== 'max_tokens'), severity: 'silent-changed', consequence: 'only temperature and max_tokens reach the request; other completion params are ignored (each is reported as field-dropped).', fix: 'move the setting into the provider profile, or accept the default' },
+    { where: 'structured_output_enabled = true', when: (d) => d.structured_output_enabled === true, severity: 'degraded', consequence: 'validated with ajv and one repair round; a model that never conforms fails the node rather than returning loose text.', fix: 'none' },
   ],
   'if-else': [{ where: null, severity: 'degraded', consequence: 'compiles to a plain if/else over variable values; no Dify expression runtime is involved (operators are matched, not evaluated as a language).', fix: 'none' }],
   code: [
@@ -1054,11 +1042,11 @@ const DEVIATIONS = {
   ],
   'http-request': [
     { where: 'timeout', severity: 'degraded', consequence: 'connect/read/write keys ARE read and enforced, but folded into one curl --max-time deadline: no independent per-phase budgets.', fix: 'ask for a total cap instead of per-phase budgets' },
-    { where: 'ssl_verify = false', severity: 'degraded', consequence: 'certificate verification is disabled for this single request only; null fails explicitly rather than guessing.', fix: 'none' },
-    { where: 'method != GET', severity: 'degraded', consequence: 'non-GET runs through sandbox + curl instead of the host web.fetch, so it inherits the sandbox and its egress limits.', fix: 'confirm the sandbox has network access on this host' },
+    { where: 'ssl_verify = false', when: (d) => d.ssl_verify === false, severity: 'degraded', consequence: 'certificate verification is disabled for this single request only; null fails explicitly rather than guessing.', fix: 'none' },
+    { where: 'method != GET', when: (d) => String(d.method ?? 'get').toLowerCase() !== 'get', severity: 'degraded', consequence: 'non-GET runs through sandbox + curl instead of the host web.fetch, so it inherits the sandbox and its egress limits.', fix: 'confirm the sandbox has network access on this host' },
   ],
   tool: [
-    { where: 'provider_type = plugin / .difypkg', severity: 'rejected', consequence: 'plugin-shaped tools need a Dify plugin daemon and are refused by name, never guessed into another tool.', fix: 'express the call as a declarative YAML contract, or enable an exact host tool via DIFY_TOOL_PASSTHROUGH' },
+    { where: 'provider_type = plugin / .difypkg', when: (d) => /plugin|difypkg/i.test(String(d.provider_type ?? '')), severity: 'rejected', consequence: 'plugin-shaped tools need a Dify plugin daemon and are refused by name, never guessed into another tool.', fix: 'express the call as a declarative YAML contract, or enable an exact host tool via DIFY_TOOL_PASSTHROUGH' },
     { where: 'tool_name', severity: 'silent-changed', consequence: 'there is no name-guessing table: an unknown name is rejected, never silently swapped for a similar host tool (e.g. jina_reader is not web_fetch).', fix: 'declare a contract for the exact name under DIFY_TOOLS_ROOT' },
     { where: 'declarative contract', severity: 'degraded', consequence: 'a contract is one HTTP request + response field mapping: no parameter type coercion, no schema validation, one-level JSON body mapping; OAuth/signed/multi-step tools cannot be expressed.', fix: 'none; see docs/dify-tool-contract.md' },
     { where: 'tool_configurations', severity: 'degraded', consequence: 'contract credentials are interpolated into the request, so the contract file and the workflow must both be trusted.', fix: 'only point DIFY_TOOLS_ROOT at trusted directories' },
@@ -1078,16 +1066,16 @@ const DEVIATIONS = {
     { where: 'usage', severity: 'degraded', consequence: 'usage is a token subset only; with no price information no cost is reported (no fabricated zero).', fix: 'none' },
   ],
   'parameter-extractor': [
-    { where: 'reasoning_mode', severity: 'degraded', consequence: 'declared reasoning mode is used to build the prompt, but Dify s full extraction schema handling is not reproduced field-for-field.', fix: 'none' },
+    { where: 'reasoning_mode', severity: 'degraded', consequence: 'declared reasoning mode is used to build the prompt, but the full Dify extraction schema handling is not reproduced field-for-field.', fix: 'none' },
   ],
   'document-extractor': [
     { where: null, severity: 'degraded', consequence: 'uses fixed official extractor functions (PDFium 4.30.0 / python-docx / pandas+openpyxl); optional dependencies must be installed or the node fails with the install command.', fix: 'run ./scripts/install-extraction.sh' },
     { where: 'file format', severity: 'rejected', consequence: '.doc .ppt .pptx .epub .eml .msg .xls are refused with a missing-conversion-chain error rather than guessed from ZIP/XML.', fix: 'convert to a supported modern format first' },
     { where: 'file content', severity: 'degraded', consequence: 'no OCR: a scanned/image-only PDF yields no text. Single-file text is capped at 4 MiB (over that fails, never truncates).', fix: 'pre-OCR the file yourself' },
-    { where: 'is_array_file', severity: 'degraded', consequence: 'any one failing file fails the whole node; it does not silently skip that file.', fix: 'none; split the array if partial success is wanted' },
+    { where: 'is_array_file = true', when: (d) => d.is_array_file === true, severity: 'degraded', consequence: 'any one failing file fails the whole node; it does not silently skip that file.', fix: 'none; split the array if partial success is wanted' },
   ],
   datasource: [
-    { where: 'provider_type = plugin', severity: 'rejected', consequence: 'native online_document / online_drive datasource plugins are not supported (need plugin package, account, and Dify file storage).', fix: 'use the declared HTTP bridge or explicit local file records' },
+    { where: 'provider_type = plugin', when: (d) => /plugin/i.test(String(d.provider_type ?? '')), severity: 'rejected', consequence: 'native online_document / online_drive datasource plugins are not supported (need plugin package, account, and Dify file storage).', fix: 'use the declared HTTP bridge or explicit local file records' },
     { where: 'datasource_parameters', severity: 'silent-changed', consequence: 'plugin paths are never guessed; an undeclared path is refused rather than resolved from a default.', fix: 'declare the path explicitly' },
     { where: null, severity: 'degraded', consequence: 'restricted to sys.datasource_type / sys.datasource_info, local file & website outputs, and explicit local/file records; a corrupt .jsonl fails the node.', fix: 'none' },
   ],
@@ -1098,7 +1086,7 @@ const DEVIATIONS = {
     { where: 'user_actions', severity: 'degraded', consequence: 'an explicit injected action resolves immediately; otherwise the run returns a waiting checkpoint and never replays upstream effects on resume.', fix: 'none' },
   ],
   iteration: [
-    { where: 'is_parallel = true', severity: 'degraded', consequence: 'compiles to the engine parallel combinator; results follow engine ordering, not a Dify worker pool with its own scheduling.', fix: 'none' },
+    { where: 'is_parallel = true', when: (d) => d.is_parallel === true, severity: 'degraded', consequence: 'compiles to the engine parallel combinator; results follow engine ordering, not a Dify worker pool with its own scheduling.', fix: 'none' },
     { where: 'error_handle_mode', severity: 'degraded', consequence: 'error handling and flatten_output are implemented, but Dify full per-item error payload shape is not reproduced.', fix: 'none' },
   ],
   loop: [{ where: 'break_conditions', severity: 'degraded', consequence: 'compiles to a real while loop over variable values with logical_operator; no Dify expression runtime is involved.', fix: 'none' }],
@@ -1132,6 +1120,40 @@ const DEVIATIONS = {
  * NOT excluded — it is scheduled and reports success while writing nothing,
  * which is precisely the silent case a deviation row must keep visible.
  */
+/**
+ * Whether a deviation bites on THIS node in THIS graph.
+ *
+ * A row without `when` describes how the kind behaves at all ("http requests run
+ * through the sandbox", "Jinja is rendered by nunjucks"). That is a property of
+ * the runtime, true of every instance, so it never downgrades a node by itself.
+ *
+ * A row with `when` names the exact export condition, so the decision is code
+ * rather than text parsing: `vision.enabled === true` bites only when the export
+ * actually turns vision on.
+ */
+function bites(node, row) {
+  return typeof row.when === 'function' ? row.when(node.data ?? {}) : false
+}
+
+/**
+ * Kinds whose implementation is deliberately a reduced replacement, not a
+ * faithful one: lexical retrieval instead of vectors, a bounded local tool loop
+ * instead of native agent strategies, fixed extractors, declarative bridges
+ * instead of native plugin lifecycles. These report `simplified` even when the
+ * export sets nothing unusual, because the reduction is the whole node.
+ *
+ * Contrast with architecture traits (code/http/template run through the harness
+ * host by design): those stay `full` unless the export asks for something the
+ * runtime ignores.
+ */
+const SIMPLIFIED_KINDS = new Set([
+  'knowledge-retrieval', 'agent', 'document-extractor', 'datasource',
+  'human-input', 'trigger', 'trigger-webhook', 'trigger-schedule', 'trigger-plugin',
+])
+
+/** Kinds that are scheduled but perform no work of their own. */
+const PLACEHOLDER_KINDS = new Set(['knowledge-index'])
+
 const NO_WORK_KINDS = new Set(['note'])
 
 /**
@@ -1154,13 +1176,14 @@ export function nodeDeviations(ir) {
         nodeKind: node.kind,
         where: `type "${node.rawType}"`,
         severity: 'silent-changed',
+        bites: true,
         consequence: 'unknown node type: the node is scheduled and the run still reports success, but the node does NO work — it is a passthrough.',
         fix: 'upgrade the runtime for this node type, or remove the node',
       })
       continue
     }
     if (NO_WORK_KINDS.has(node.kind)) continue
-    for (const row of DEVIATIONS[node.kind] ?? []) out.push({ nodeId: node.id, nodeKind: node.kind, ...row })
+    for (const row of DEVIATIONS[node.kind] ?? []) out.push({ nodeId: node.id, nodeKind: node.kind, bites: bites(node, row), ...row })
   }
   return out
 }
@@ -1185,9 +1208,9 @@ export function compileGraph(parsed, options = {}) {
   const inspection = inspectIR(ir)
   if (inspection.issues.length > 0) throw new Error(inspection.issues.join('; '))
   if (ir.entryId === undefined) throw new Error('no entry node')
-  if (ir.nodes.some(n => n.kind === 'human-input' && !ir.topNodes.includes(n))) throw new Error('human-input inside iteration/loop needs container checkpoint support (remaining S); refusing before side effects')
+  if (ir.nodes.some(n => n.kind === 'human-input' && !ir.topNodes.includes(n))) throw new Error('human-input inside iteration/loop is unsupported (no container checkpointing); refusing before side effects')
 
-  for (const node of ir.nodes.filter(n => n.kind === 'human-input')) if ((node.data.inputs ?? []).some(input => input.type && !['paragraph', 'text-input', 'text_input'].includes(input.type))) throw new Error(`human-input ${node.id}: advanced form/file fields remain S; refusing before side effects`)
+  for (const node of ir.nodes.filter(n => n.kind === 'human-input')) if ((node.data.inputs ?? []).some(input => input.type && !['paragraph', 'text-input', 'text_input'].includes(input.type))) throw new Error(`human-input ${node.id}: select/file form fields are unsupported; refusing before side effects`)
 
   const preferredIndex = new Map(ir.nodes.map((node, index) => [node.id, index]))
   const varByNode = new Map()

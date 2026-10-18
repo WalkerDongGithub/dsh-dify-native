@@ -418,7 +418,7 @@ def _extract_text_by_file_extension(*, file_content: bytes, file_extension: str)
 
 def _needs_conversion(kind):
     def fail(file_content):
-        raise ValueError(f'{kind} requires an explicit conversion service / unstructured chain; not installed by requirements-extraction.txt (remaining S)')
+        raise ValueError(f'{kind} requires an explicit conversion service / unstructured chain; not installed by requirements-extraction.txt')
     return fail
 
 _extract_text_from_doc = _needs_conversion('DOC')

@@ -1175,8 +1175,7 @@ async function executeHttpCurl(ctx, spec, request, { method, url, headers, sslVe
  * silent-semantic-drift the contract exists to remove.
  *
  * `tool_configurations` (user-configured, e.g. API keys) and `tool_parameters`
- * (per-call inputs) are now both forwarded — previously `tool_configurations`
- * was dropped and `provider_name` ignored.
+ * (per-call inputs) are both forwarded, together with `provider_name`.
  */
 async function executeTool(ctx, spec, request, env) {
   const provider = String(spec.provider ?? '')

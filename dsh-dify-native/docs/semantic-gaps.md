@@ -30,8 +30,8 @@ L 表示仍欠本地实现/第三方依赖/回归；E 表示缺少明确的真�
 | CV1 | 审计外 | conversation | L | 失败/中止运行的变量提交边界 | 对标固定官方赋值/持久化路径，验证 assigner 之后失败或取消的跨 run 状态；当前仅成功/等待快照落盘。 |
 | HT1 | 审计外 | http-request | L | 独立阶段 timeout | 分别执行 connect/read/write 预算；当前官方键已生效，但折合单一最大截止时间，不能证明三阶段等价。 |
 
-RAG 按用户要求暂停，单列且不拆分验收子项：#2 knowledge-retrieval、#3 knowledge-index，共 2 组、2 个节点名。现有词法检索/placeholder 状态不被当作本轮完成，算法未扩展。
+RAG 按用户要求暂停，单列且不拆分验收子项：#2 knowledge-retrieval、#3 knowledge-index，共 2 组、2 个节点名。现有实现是词法检索与 placeholder，未扩展其算法。
 
-公网 webhook 入站、真实公网 Jina 可达性、真实模型自治质量、全部时区/DST 组合与断电恢复尚未证明；没有将这些未做的广泛测试虚构成额外 bug/S 数。分布式 exactly-once 不是本轮据以增加缺口的官方承诺。本地去重采用先 claimed 后执行，中断不自动重放，边界见 [event-deployment.md](event-deployment.md) / [human-wait.md](human-wait.md)。
+未验证范围：公网 webhook 入站、真实公网 Jina 可达性、真实模型自治质量、全部时区/DST 组合、断电恢复，不计入上述子项。本地去重采用先 claimed 后执行，中断不自动重放，不承诺分布式 exactly-once；边界见 [event-deployment.md](event-deployment.md) / [human-wait.md](human-wait.md)。
 
 依据：cd47a47 的 document_extractor / datasource / agent 固定节点函数，以及 5dff246 的 trigger*/human callback / ScheduleService，路径与函数分别见 [能力报告](capability-report.md) 和各部署协议。原始审计证据见 [reachability-audit.md](reachability-audit.md)。

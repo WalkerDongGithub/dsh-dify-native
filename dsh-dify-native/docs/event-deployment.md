@@ -33,4 +33,4 @@ plugin bridge 必须 `bridge:true`，签名 `X-Event-Signature` 为 hex HMAC-SHA
 
 `tests/engine-schedule.test.mjs` 真实验证 Asia/Shanghai 09:00 → UTC01:00、同槽去重、关闭重开后的补偿，不以 mock 引擎替代交付。计时器生命周期关闭已验证，公网及分布式调度未验。
 
-新增 `tests/engine-schedule-visual.test.mjs` 先真实失败（缺少 cron 转换），修复后四种 visual 频率均实际启动引擎并断言 UTC 槽时间。转换函数保存在 lib/schedule-parser.py，来源固定 5dff246。
+`tests/engine-schedule-visual.test.mjs` 让四种 visual 频率实际启动引擎并断言 UTC 槽时间。转换函数保存在 lib/schedule-parser.py，来源固定 5dff246。
