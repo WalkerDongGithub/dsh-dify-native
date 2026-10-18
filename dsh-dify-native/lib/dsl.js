@@ -286,10 +286,10 @@ function selectorExpr(selector, scope) {
  * `selectorExpr`; `{{ name }}` references resolve through the node's own
  * `variables` bindings.
  */
-function renderTextExpr(text, scope, localBindings = new Map()) {
+function renderTextExpr(text, scope, localBindings = new Map(), expandLocalBindings = true) {
   /** Split one literal into literal/expression segments on `{{ name }}` bindings. */
   const expandLocals = (literal) => {
-    if (localBindings.size === 0) return [{ literal }]
+    if (!expandLocalBindings || localBindings.size === 0) return [{ literal }]
     const out = []
     const token = /\{\{\s*([^{}#]+?)\s*\}\}/g
     let cursor = 0
@@ -1779,8 +1779,10 @@ export function compileGraph(parsed, options = {}) {
         lines.push(`${pad}  __ctx[${JSON.stringify(name)}] = ${expr}`)
       }
       // Selector substitution happens as a plain string render first; the
-      // result is then handed to nunjucks unchanged.
-      lines.push(`${pad}  const __tpl = ${renderTextExpr(template, scope, localBindings(node, scope))}`)
+      // result is then handed to nunjucks unchanged. Keep local Jinja variables
+      // intact: pre-expanding them breaks loop scoping and reinterprets values
+      // containing template syntax as code on the second render.
+      lines.push(`${pad}  const __tpl = ${renderTextExpr(template, scope, localBindings(node, scope), false)}`)
       lines.push(`${pad}  const __res = await __jinja(__tpl, __ctx, ${JSON.stringify(node.id)}, ${JSON.stringify(node.title ?? '')})`)
       lines.push(`${pad}  ${variable} = { ok: true, kind: 'template-transform', title: ${JSON.stringify(node.title)}, outputs: __res }`)
       lines.push(`${pad}  ${scope.nodes}[${JSON.stringify(node.id)}] = ${variable}`)
